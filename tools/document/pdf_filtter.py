@@ -20,6 +20,7 @@ from tools.document.schema import (
     ChunkType,
     DocumentChunk,
     ImageMetadata,
+    generate_chunk_id,
 )
 
 
@@ -245,8 +246,7 @@ class PDFProcessor:
         )
         content = f"{prefix}\n{text}"
 
-        safe_section = re.sub(r"[^\w\u4e00-\u9fff]", "_", sec.title)
-        chunk_id = f"{doc_name}-p{sec.start_page}-{safe_section}-{index}"
+        chunk_id = generate_chunk_id(f"{doc_name}.pdf", content)
 
         metadata = ChunkMetadata(
             source_doc=f"{doc_name}.pdf",
@@ -516,8 +516,7 @@ class PDFProcessor:
 
         content = "\n".join(content_parts)
 
-        safe_section = re.sub(r"[^\w\u4e00-\u9fff]", "_", section_title or "unknown")
-        chunk_id = f"{doc_name}-p{image_meta.page}-img-{image_meta.index_in_page}"
+        chunk_id = generate_chunk_id(f"{doc_name}.pdf", content)
 
         metadata = ChunkMetadata(
             source_doc=f"{doc_name}.pdf",

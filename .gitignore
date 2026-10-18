@@ -20,3 +20,12 @@ wheels/
 # Runtime artifacts (screenshots, traces, downloads)
 artifacts/
 /data/
+
+# Environment secrets
+.env
+
+# Document processing cache
+cache/
+
+# Knowledge store exports
+knowledge-store/

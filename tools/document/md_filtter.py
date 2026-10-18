@@ -8,7 +8,7 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from tools.document.schema import DocumentChunk, ChunkType
+from tools.document.schema import DocumentChunk, ChunkType, generate_chunk_id
 
 
 class MarkdownProcessor:
@@ -285,12 +285,12 @@ class MarkdownProcessor:
         Returns:
             DocumentChunk对象
         """
-        # 生成chunk_id
-        chunk_id = f"{doc_name}_{chunk_type.value}_{chunk_index:04d}"
-
         # 构建上下文前缀
         prefix = f"[{doc_name}] [{module}] [{section}]"
         full_content = f"{prefix}\n\n{content}"
+
+        # 生成幂等 ASCII chunk_id
+        chunk_id = generate_chunk_id(f"{doc_name}.md", full_content)
 
         from tools.document.schema import ChunkMetadata
 

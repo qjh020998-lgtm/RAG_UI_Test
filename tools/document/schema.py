@@ -6,7 +6,36 @@
 from enum import Enum
 from typing import Optional
 
+import hashlib
+
 from pydantic import BaseModel, Field
+
+
+# 文档 slug 映射：文件名 -> 2 字母 ASCII 缩写
+DOC_SLUG_MAP: dict[str, str] = {
+    "ERP_UI_Web_Testing_Guide.md": "tg",
+    "管伊佳ERP-功能清单.md": "fl",
+    "管伊佳ERP-数据库设计.md": "ds",
+    "管伊佳ERP-用户手册v3.6.pdf": "um",
+}
+
+
+def generate_chunk_id(source_doc: str, content: str) -> str:
+    """Generate a stable ASCII chunk ID.
+
+    Format: {doc_slug}_{md5(content)[:8]}
+    Example: tg_a3f1b2c4, um_7e9d0f1a
+
+    Args:
+        source_doc: Source document filename (e.g. "foo.md", "bar.pdf")
+        content: The final chunk content to hash
+
+    Returns:
+        ASCII string, max 11 chars (2 slug + 1 _ + 8 hex)
+    """
+    slug = DOC_SLUG_MAP.get(source_doc, "xx")
+    content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()[:8]
+    return f"{slug}_{content_hash}"
 
 
 class ChunkType(str, Enum):
@@ -62,7 +91,7 @@ class DocumentChunk(BaseModel):
     - image_metadata: 仅当 chunk_type=IMAGE 时填充
     """
 
-    chunk_id: str = Field(description="块唯一标识")
+    chunk_id: str = Field(description="块唯一标识，格式: {doc_slug}_{md5(content)[:8]}，纯 ASCII，幂等")
     content: str = Field(description="块的完整文本内容（含上下文前缀）")
     metadata: ChunkMetadata = Field(description="元数据")
     image_metadata: Optional[ImageMetadata] = Field(

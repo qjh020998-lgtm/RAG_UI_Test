@@ -21,7 +21,7 @@
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | Phase 1 | 基础设施层（tools/playwright、page、data、testcases） | ✅ 已完成 |
-| Phase 2 | RAG 知识库（BGE-M3 + Milvus，见 `plan/rag_retrieval_design.md`） | ⏳ 未开始 |
+| Phase 2 | RAG 知识库（BGE-M3 + Milvus，见 `plan/think or choice/rag_retrieval_design.md`） | 📐 设计完成，待编码 |
 | Phase 3 | AIGC 测试用例生成 | ⏳ 未开始 |
 | Phase 4 | 控件定位自愈 | ⏳ 未开始 |
 | Phase 5 | 监控与报告 | ⏳ 未开始 |
@@ -58,8 +58,11 @@ RAG_UI_Test/
 │   └── test_login.py       # 登录用例（parametrize 数据驱动）
 ├── artifacts/              # 运行时产物：截图/trace/下载（git 忽略，自动创建）
 ├── docs/                   # 业务文档（RAG 知识库来源，待填充）
+├── cache/                  # 文档处理产物（chunks.json、OCR 缓存等，git 忽略）
 ├── knowledge-store/        # 知识库产物（导出/评测/备份；Milvus 数据在 Docker volume）
 ├── plan/                   # 项目计划与阶段总结（设计依据）
+│   ├── initial_project_plan_2026-10-17.md
+│   └── think or choice/    # 选型分析与设计决策文档
 ├── .codex/skills/pom-ui-automation-generator/SKILL.md  # POM 代码生成规范
 ├── main.py                 # 入口示例（仅打印帮助）
 ├── pyproject.toml          # 依赖（uv 管理）
@@ -125,7 +128,18 @@ class TestLogin:
 
 - 优先用 `PlaywrightConfig`（`PW_` 前缀环境变量），例如 `PW_BROWSER_TYPE`、`PW_HEADLESS`、`PW_SLOW_MO`、`PW_TRACE_ENABLED`。
 - `base_url` 来自 `data/config.yaml`，由 `data_loader.load_config()` 读取，不要在用例里写死 URL。
-- 不要提交 `.venv/`、`.idea/`、`artifacts/`、缓存目录。
+- 不要提交 `.venv/`、`.idea/`、`artifacts/`、`cache/`、缓存目录。
+
+
+
+### 4.5 RAG 层
+
+- **嵌入模型**：BGE-M3（路径 `D:\huggingface_cache\modelscope\models\BAAI--bge-m3\snapshots\master`），使用 FlagEmbedding SDK。
+- **向量库**：Milvus standalone（Docker Compose，`localhost:19530`），collection 名 `erp_knowledge`。
+- **检索策略**：dense + sparse 双路召回 + RRFRanker(k=60) 融合，支持 metadata 过滤（module、chunk_type）。
+- **数据摄入**：从 `cache/_all_chunks.json` 读取已切片数据，按 chunk_type 分类构造 embedding_text 后批量嵌入写入 Milvus。
+- **配置前缀**：`RAG_`（如 `RAG_MILVUS_URI`、`RAG_COLLECTION_NAME`）。
+- 不要把 chunks 数据或嵌入结果放到 `data/` 目录；中间产物放 `cache/`，知识库产出放 `knowledge-store/`。
 
 ## 5. 常用命令
 
@@ -150,6 +164,16 @@ PW_HEADLESS=false PW_SLOW_MO=500 pytest testcases/test_login.py -v -s
 
 # 框架入口帮助
 python main.py
+
+# Milvus 相关
+docker compose up -d              # 启动 Milvus（etcd + MinIO + milvus-standalone）
+docker compose down               # 停止 Milvus
+
+# RAG 数据摄入（待实现）
+python -m agent.rag_pipline --ingest cache/_all_chunks.json
+
+# RAG 检索测试（待实现）
+python -m agent.rag_pipline --query "采购入库的操作流程"
 ```
 
 ## 6. 数据文件格式
@@ -176,7 +200,7 @@ base_url: "http://39.101.122.147:3000"
 1. **定位策略**：Accessibility Tree 优先于 DOM，抗前端重构、语义化、Playwright 原生支持。
 2. **LLM 策略**：Qwen 3.8 双模型——`qwen3.8-flash` 处理常规任务，`qwen3.8-max` 负责代码生成与自愈。
 3. **嵌入模型**：本地 BGE-M3，路径 `D:\huggingface_cache\modelscope\models\BAAI--bge-m3\snapshots\master`。
-4. **向量库**：**Milvus 单机版（Docker Compose：etcd + MinIO + milvus-standalone，19530/9091）**，dense + sparse 双路召回、RRFRanker 融合；按 `doc_version` 分区 + collection alias 切换，方案见 `plan/rag_retrieval_design.md`。
+4. **向量库**：**Milvus 单机版（Docker Compose：etcd + MinIO + milvus-standalone，19530/9091）**，dense + sparse 双路召回、RRFRanker 融合；按 `doc_version` 分区 + collection alias 切换，方案见 `plan/think or choice/rag_retrieval_design.md`。
 5. **AIGC 采用混合架构**（非纯 Agentic）：RAG 检索 + 测试规划 → 自动收集 Page 类签名 → LLM 按模板生成 → AST 校验后写入 `testcases/`。理由：兼顾精度、延迟与 token 成本。
 
 ## 8. 修改时的注意事项
@@ -191,6 +215,6 @@ base_url: "http://39.101.122.147:3000"
 
 - `plan/initial_project_plan_2026-10-17.md`：完整架构、RAG/LLM/自愈设计与路线图
 - `plan/phase1_implementation_summary.md`：Phase 1 实施清单
-- `plan/rag_retrieval_design.md`：Phase 2 检索层选型（嵌入模型、向量库、分块与评估方案）
+- `plan/think or choice/rag_retrieval_design.md`：Phase 2 检索层选型分析（三种方案对比、Milvus schema、嵌入策略、实施计划）
 - `.codex/skills/pom-ui-automation-generator/SKILL.md`：POM 代码生成规范
 - `README.md`：面向使用者的快速开始
