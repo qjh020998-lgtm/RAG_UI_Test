@@ -19,7 +19,6 @@ wheels/
 
 # Runtime artifacts (screenshots, traces, downloads)
 artifacts/
-/data/
 
 # Environment secrets
 .env

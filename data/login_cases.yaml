@@ -1,0 +1,24 @@
+# 登录测试数据
+# testcases/test_login.py 通过 @pytest.mark.parametrize 读取本文件
+# expect_success: true  -> 登录后应跳转离开 /user/login
+# expect_success: false -> 应停留在 /user/login
+
+- name: valid_default
+  username: "jsh"
+  password: "123456"
+  expect_success: true
+
+- name: wrong_password
+  username: "jsh"
+  password: "wrong_password"
+  expect_success: false
+
+- name: empty_username
+  username: ""
+  password: "123456"
+  expect_success: false
+
+- name: empty_password
+  username: "jsh"
+  password: ""
+  expect_success: false
