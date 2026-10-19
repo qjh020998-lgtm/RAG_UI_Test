@@ -32,22 +32,26 @@ RAG_UI_Test/
 │   ├── load_documents.py   # 文档切分统一入口
 │   └── ...                 # app/models/rag_pipline/cache/security/monitering 仍为占位
 ├── tools/document/         # 文档处理层（MD / PDF 解析切分 + OCR）
-├── tools/playwright/       # Playwright 封装
-│   ├── conf.py             # 浏览器配置
-│   ├── locators.py         # A11y 定位器
-│   ├── actions.py          # 浏览器操作
-│   └── browser.py          # 浏览器生命周期
+├── pw_core/                # Playwright 核心包
+│   ├── conf.py             # 浏览器/API 配置
+│   ├── base_page.py        # 页面基类：定位/动作/等待/断言/弹窗/表格
+│   ├── base_test.py        # BaseTest + BasePage 契约检查
+│   └── driver/             # Web/API 驱动层
+│       ├── driver_factory.py
+│       ├── driver_manager.py
+│       ├── web_driver.py
+│       └── api_client.py
 ├── tools/view_milvus_data.py  # Milvus 数据浏览与检索演示
 ├── page/                   # Page Object 层
-│   ├── base_page.py        # 页面基类
+│   ├── base_page.py        # 兼容 shim，转发到 pw_core.base_page
 │   └── login_page.py       # 登录页
 ├── data/                   # 只放 YAML 测试数据
 │   ├── config.yaml         # base_url 等配置
 │   └── login_cases.yaml    # 登录测试数据
 ├── data_loader.py          # YAML 加载 + Pydantic 校验
 ├── testcases/              # 测试用例
-│   ├── conftest.py         # Pytest fixtures
 │   └── test_login.py       # 登录测试（parametrize）
+├── conftest.py             # 根级浏览器/context/page/auth fixtures
 ├── testself/               # 框架自测（文档处理、嵌入检索质量）
 ├── docs/                   # 业务文档（RAG 知识库来源）
 ├── cache/                  # 切分产物与 OCR 缓存（git 忽略）
@@ -222,7 +226,7 @@ class TestLogin:
 
 - `data/config.yaml`：`base_url`
 - 环境变量（前缀 `PW_`）：`PW_BROWSER_TYPE`、`PW_HEADLESS`、`PW_SLOW_MO`、
-  `PW_TRACE_ENABLED`、`PW_VIEWPORT_WIDTH` 等，详见 `tools/playwright/conf.py`
+  `PW_TRACE_ENABLED`、`PW_VIEWPORT_WIDTH` 等，详见 `pw_core/conf.py`
 - 环境变量（前缀 `RAG_`）：写在 `.env`（从 `.env.example` 复制），分四组，详见 `agent/config.py`
   - `RAG_MILVUS_*`：`URI`、`COLLECTION_NAME`、`COLLECTION_ALIAS`、`TIMEOUT`
   - `RAG_EMBEDDING_*`：`MODEL_PATH`、`DEVICE`、`USE_FP16`、`BATCH_SIZE`、`DENSE_DIM`、`MAX_LENGTH`
@@ -285,14 +289,14 @@ export PW_TRACE_ENABLED=true
 | Phase 1 基础设施层（Playwright / POM / 数据驱动） | ✅ 已完成 |
 | Phase 2 RAG 知识库（切分 + OCR + BGE-M3 + Milvus 混合检索） | ✅ 主链路已跑通，库内 235 条 |
 | Phase 2.5 数据质量与工程加固 | ✅ 已完成（位置型主键、幂等 ingest、OCR 修复、dense 门控、manifest） |
-| Phase 3 AIGC 测试用例生成 | ⏳ 未开始，方案已定 |
+| Phase 3 AIGC 测试用例生成 | 🚧 Phase 3.0 基础设施已完成（pw_core/BasePage/Driver/契约测试），3.1+ 待做 |
 | Phase 4 控件定位自愈 | ⏳ 未开始 |
 | Phase 5 监控与报告 | ⏳ 未开始 |
 
 ## 下一步
 
 - [x] Phase 2.5：修数据源污染、稳定 chunk_id、检索性能与可信度门控、摄入溯源
-- [ ] Phase 3：Spec 中间层 + 模板化代码生成 + AST 校验 + 试跑闭环
+- [ ] Phase 3：基础设施加固（3.0 已完成）→ Spec 中间层 + 模板化代码生成 + AST 校验 + 试跑闭环
 - [ ] Phase 4：自愈机制
 - [ ] Phase 5：监控与报告
 

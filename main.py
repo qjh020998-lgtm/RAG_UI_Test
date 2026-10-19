@@ -12,7 +12,7 @@ def main():
     print("=" * 60)
     print()
     print("框架组件:")
-    print("  - tools/playwright/: Playwright 浏览器操作封装")
+    print("  - pw_core/: Playwright 核心封装（Web/API Driver + BasePage）")
     print("  - page/: Page Object 页面类")
     print("  - data/: YAML 测试数据（只放 .yaml 文件）")
     print("  - data_loader.py: YAML 加载与 Pydantic 校验")

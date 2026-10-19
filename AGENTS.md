@@ -20,10 +20,10 @@
 
 | 阶段 | 内容 | 状态 |
 |------|------|------|
-| Phase 1 | 基础设施层（tools/playwright、page、data、testcases） | ✅ 已完成 |
+| Phase 1 | 基础设施层（pw_core、page、data、testcases） | ✅ 已完成 |
 | Phase 2 | RAG 知识库（文档切分 + OCR + BGE-M3 + Milvus 混合检索） | ✅ 主链路已跑通（库内 235 条，检索实测通过） |
 | Phase 2.5 | RAG 数据质量与工程加固（见 `plan/phase2_alignment_2026-10-19.md`） | ✅ 已完成：位置型主键、幂等 ingest、OCR 修复、dense 门控、manifest |
-| Phase 3 | AIGC 测试用例生成（选型见 `plan/think or choice/aigc_code_generation_strategy.md`） | ⏳ 未开始，方案已定 |
+| Phase 3 | AIGC 测试用例生成（选型见 `plan/think or choice/aigc_code_generation_strategy.md`） | 🚧 Phase 3.0 基础设施已完成（pw_core/BasePage/Driver/契约测试），3.1+ 待做 |
 | Phase 4 | 控件定位自愈 | ⏳ 未开始 |
 | Phase 5 | 监控与报告 | ⏳ 未开始 |
 
@@ -60,22 +60,26 @@ RAG_UI_Test/
 │   ├── md_filtter.py       # Markdown 解析切分（按 H2/H3）
 │   ├── pdf_filtter.py      # PDF 解析切分（按 ToC 小节）+ 图片提取 + RapidOCR + OCR 缓存
 │   └── __init__.py         # DocumentProcessor 统一入口
-├── tools/playwright/       # Playwright 封装（不写业务）
-│   ├── conf.py             # 配置（Pydantic-Settings，PW_ 前缀）
-│   ├── locators.py         # A11y 定位器（8 种语义定位）
-│   ├── actions.py          # 浏览器操作（点击/填写/等待/断言/截图）
-│   └── browser.py          # 浏览器生命周期管理
+├── pw_core/                # ✅ Playwright 核心包（不写业务）
+│   ├── conf.py             # 配置（PW_ 前缀；ApiConfig 用 PW_API_）
+│   ├── base_page.py        # 页面基类：定位/动作/等待/断言/弹窗/表格
+│   ├── base_test.py        # BaseTest + BasePage 契约检查
+│   └── driver/             # Web/API 驱动层
+│       ├── driver_factory.py  # 工厂：按平台创建驱动
+│       ├── driver_manager.py  # 管理器：API vs Web 策略
+│       ├── web_driver.py      # Playwright 浏览器/context/page 生命周期
+│       └── api_client.py      # 可选 ERP API 客户端（httpx）
 ├── tools/view_milvus_data.py  # ✅ Milvus 数据浏览/检索演示工具
 ├── page/                   # Page Object 层（一个页面一个类）
-│   ├── base_page.py        # 页面基类
+│   ├── base_page.py        # 兼容 shim，转发到 pw_core.base_page
 │   └── login_page.py       # 登录页
 ├── data/                   # 只放 YAML 测试数据，禁止放 .py
 │   ├── config.yaml         # base_url 等运行配置
 │   └── login_cases.yaml    # 登录测试数据
 ├── data_loader.py          # YAML 加载 + Pydantic 校验（唯一数据入口）
 ├── testcases/
-│   ├── conftest.py         # 浏览器/page fixture
 │   └── test_login.py       # 登录用例（parametrize 数据驱动）
+├── conftest.py             # ✅ 根级浏览器/context/page/auth fixture
 ├── testself/               # 框架自测（文档处理 + 嵌入检索质量）；不在 pytest.ini 的 testpaths 内，需显式指定路径
 ├── docs/                   # ✅ 业务文档（RAG 知识库来源，已填充 3 MD + 1 PDF）
 ├── docker-compose.yml      # ✅ Milvus 部署（唯一权威：v2.5.14，数据落 ./volumes/）
@@ -224,6 +228,8 @@ python tools/view_milvus_data.py --type image --module 采购管理 --limit 3
 python tools/view_milvus_data.py --search "采购入库的操作流程"
 
 # 框架自测（不在 pytest.ini 的 testpaths 内，必须显式给路径）
+pytest testself/test_pw_core_base_page.py -v
+pytest testself/test_pw_core_driver.py -v
 pytest testself/test_md_processor.py -v
 pytest testself/test_pdf_processor.py -v -s          # 含 OCR，首次很慢
 pytest testself/test_embedding_retrieval.py -v -s    # 需 Milvus 已启动，且会加载 BGE-M3
@@ -269,7 +275,7 @@ base_url: "http://39.101.122.147:3000"
 6. **AIGC 中间层用 YAML Spec，不用 Excel**：Spec 是真源（可 Pydantic 校验、可 git diff），
    Excel 只作为给业务评审的导出视图。LLM 不直接写 `testcases/*.py`，代码由 Jinja2 模板渲染。
    见 `plan/think or choice/aigc_code_generation_strategy.md`。
-7. **Playwright MCP 限定为「生成期探测 + 验证期 dry-run」**，不取代 `tools/playwright/`，
+7. **Playwright MCP 限定为「生成期探测 + 验证期 dry-run」**，不取代 `pw_core/`，
    测试运行期仍走自有封装（保留 trace/截图/artifacts 能力）。同上文档 §4。
 8. **父子分层检索不做**：235 chunks、最大分组仅 6 个、层级仅 3 层，
    用 metadata 过滤 + `chunk_index` 邻居召回即可等效。见 `plan/think or choice/parent_child_analysis.md`。

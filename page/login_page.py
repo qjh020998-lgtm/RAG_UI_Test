@@ -1,9 +1,10 @@
-"""Login Page Object."""
+"""登录页 Page Object。"""
 
 import re
 
 from playwright.sync_api import Page, expect
-from page.base_page import BasePage
+
+from pw_core.base_page import BasePage
 
 
 class LoginPage(BasePage):
@@ -53,9 +54,9 @@ class LoginPage(BasePage):
             username: 用户名
             password: 密码
         """
-        self.actions.fill(self.username_input, username)
-        self.actions.fill(self.password_input, password)
-        self.actions.click(self.login_button)
+        self.fill(self.username_input, username)
+        self.fill(self.password_input, password)
+        self.click(self.login_button)
 
     def login_and_wait(
         self,
@@ -97,7 +98,7 @@ class LoginPage(BasePage):
 
     def toggle_remember(self) -> None:
         """切换记住密码复选框。"""
-        self.actions.click(self.remember_checkbox)
+        self.click(self.remember_checkbox)
 
     def is_remember_checked(self) -> bool:
         """检查记住密码是否勾选。"""
