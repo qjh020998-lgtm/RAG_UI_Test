@@ -30,14 +30,20 @@ def load_documents(
     docs_dir: Path,
     image_output_dir: Path,
     output_path: Path,
+    *,
+    retry_failed_ocr: bool = True,
 ) -> List[DocumentChunk]:
     """加载并切分所有文档，返回 chunk 列表。"""
     print(f"[信息] 文档目录: {docs_dir}")
     print(f"[信息] 图片输出: {image_output_dir}")
     print(f"[信息] JSON 输出: {output_path}")
+    print(f"[信息] 重试失败 OCR: {retry_failed_ocr}")
     print()
 
-    processor = DocumentProcessor(image_output_dir=image_output_dir)
+    processor = DocumentProcessor(
+        image_output_dir=image_output_dir,
+        retry_failed_ocr=retry_failed_ocr,
+    )
 
     print("=" * 70)
     print("开始处理文档...")
@@ -109,10 +115,38 @@ def export_to_json(
     stats: dict,
     output_path: Path,
 ) -> None:
-    """导出结构化 JSON。"""
+    """导出结构化 JSON，并做入库前的数据质量断言。"""
+    ids = [chunk.chunk_id for chunk in all_chunks]
+    duplicate_ids = sorted({cid for cid in ids if ids.count(cid) > 1})
+    if duplicate_ids:
+        raise ValueError(
+            f"chunk_id 不唯一，拒绝导出：{len(duplicate_ids)} 组重复 {duplicate_ids[:5]}"
+        )
+
+    dirty = [
+        chunk.chunk_id
+        for chunk in all_chunks
+        if any(marker in chunk.content for marker in ("OCR 失败", "Traceback (most recent call last)"))
+    ]
+    if dirty:
+        raise ValueError(f"content 含 OCR 失败/traceback，拒绝导出：{dirty[:5]}")
+
+    absolute_image_paths = [
+        chunk.image_metadata.image_path
+        for chunk in all_chunks
+        if chunk.image_metadata
+        and Path(chunk.image_metadata.image_path).is_absolute()
+    ]
+    if absolute_image_paths:
+        raise ValueError(
+            f"image_path 必须是仓库相对路径，发现绝对路径：{absolute_image_paths[:5]}"
+        )
+
     export_data = {
         "metadata": {
             "total_chunks": stats["total_chunks"],
+            "unique_chunk_ids": len(set(ids)),
+            "id_scheme": "{doc_slug}_{type}_{pXXX}_{iXXXX}",
             "doc_stats": stats["doc_stats"],
             "type_distribution": stats["type_distribution"],
             "module_distribution": stats["module_distribution"],
@@ -141,6 +175,12 @@ def main():
         "--output", type=Path,
         default=PROJECT_ROOT / "cache" / "chunks.json",
     )
+    parser.add_argument(
+        "--retry-failed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否重试上次失败的 OCR（默认开启；失败结果不会写入成功缓存）",
+    )
     args = parser.parse_args()
 
     if not args.docs_dir.exists():
@@ -148,7 +188,10 @@ def main():
         sys.exit(1)
 
     all_chunks = load_documents(
-        args.docs_dir, args.image_output_dir, args.output,
+        args.docs_dir,
+        args.image_output_dir,
+        args.output,
+        retry_failed_ocr=args.retry_failed,
     )
 
     if not all_chunks:
@@ -159,9 +202,15 @@ def main():
     print_statistics(stats, all_chunks)
     export_to_json(all_chunks, stats, args.output)
 
+    image_chunks = [c for c in all_chunks if c.metadata.chunk_type == ChunkType.IMAGE]
+    ocr_ok = sum(1 for c in image_chunks if c.image_metadata and c.image_metadata.ocr_text)
     print()
     print("=" * 70)
     print("文档加载完成")
+    print(f"  chunk 总数: {len(all_chunks)}")
+    print(f"  唯一 chunk_id: {len({c.chunk_id for c in all_chunks})}")
+    print(f"  图片 OCR 成功: {ocr_ok}/{len(image_chunks)}")
+    print(f"  OCR 失败文本残留: 0（已做导出断言）")
     print("=" * 70)
 
 

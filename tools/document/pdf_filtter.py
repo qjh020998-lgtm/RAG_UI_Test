@@ -5,14 +5,18 @@
 确保图片与对应功能模块的描述信息关联，生成带完整元数据的文档块。
 """
 
-import re
 import hashlib
+import io
 import json
+import logging
+import re
+import time
 from pathlib import Path
 from typing import List, Optional
 
 import pymupdf as fitz  # PyMuPDF
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
 from tools.document.schema import (
@@ -20,8 +24,19 @@ from tools.document.schema import (
     ChunkType,
     DocumentChunk,
     ImageMetadata,
+    compute_content_hash,
     generate_chunk_id,
 )
+
+logger = logging.getLogger(__name__)
+
+# 项目根目录：tools/document/pdf_filtter.py -> parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_OCR_CACHE = _PROJECT_ROOT / "cache" / "ocr_cache.json"
+_DEFAULT_OCR_FAILED = _PROJECT_ROOT / "cache" / "ocr_failed.json"
+
+# OCR 文本行排序的 Y 轴容差（像素）：同一行内的文字按 X 排序
+_OCR_ROW_TOLERANCE = 8
 
 
 class Section:
@@ -60,11 +75,23 @@ class PDFProcessor:
 
     PREFIX_TEMPLATE = "《{doc_title}》 > {module} > {section_title}（p.{page}）"
 
-    def __init__(self, image_output_dir: str | Path = "knowledge-store/images"):
+    def __init__(
+        self,
+        image_output_dir: str | Path = "knowledge-store/images",
+        *,
+        retry_failed_ocr: bool = True,
+        ocr_cache_path: str | Path | None = None,
+        ocr_failed_path: str | Path | None = None,
+        max_image_side: int = 2000,
+    ):
         """初始化。
 
         Args:
             image_output_dir: 图片输出目录
+            retry_failed_ocr: 是否重试上次失败的 OCR
+            ocr_cache_path: OCR 成功缓存路径（默认项目根 cache/ocr_cache.json）
+            ocr_failed_path: OCR 失败记录路径（默认项目根 cache/ocr_failed.json）
+            max_image_side: 送 OCR 前的最长边上限（像素）
         """
         self.image_output_dir = Path(image_output_dir)
         self.ocr = RapidOCR()
@@ -75,9 +102,16 @@ class PDFProcessor:
         )
 
         # OCR cache (JSON-based)
-        self._cache_path = Path("cache/ocr_cache.json")
-        self._ocr_cache = self._load_ocr_cache()
+        self._cache_path = Path(ocr_cache_path) if ocr_cache_path else _DEFAULT_OCR_CACHE
+        self._failed_path = (
+            Path(ocr_failed_path) if ocr_failed_path else _DEFAULT_OCR_FAILED
+        )
+        self._retry_failed = retry_failed_ocr
+        self._max_image_side = max_image_side
+        self._ocr_cache = self._load_json_dict(self._cache_path)
+        self._ocr_failed = self._load_json_dict(self._failed_path)
         self._cache_dirty = False
+        self._failed_dirty = False
 
     def parse(
         self,
@@ -104,14 +138,22 @@ class PDFProcessor:
             # Step 3: 按小节提取文本并切分
             text_chunks = self._process_text(doc, sections, doc_name, doc_title)
 
-            # Step 4: 合并并编号
+            # Step 4: 合并、编号并生成位置型主键
             all_chunks = text_chunks + image_chunks
             for idx, chunk in enumerate(all_chunks):
                 chunk.metadata.chunk_index = idx
+                chunk.chunk_id = generate_chunk_id(
+                    chunk.metadata.source_doc,
+                    chunk.metadata.chunk_type,
+                    chunk.metadata.page,
+                    idx,
+                )
+                chunk.content_hash = compute_content_hash(chunk.content)
 
             return all_chunks
         finally:
             self._save_ocr_cache()
+            self._save_ocr_failed()
             doc.close()
 
     # ==================== ToC 解析 ====================
@@ -246,7 +288,8 @@ class PDFProcessor:
         )
         content = f"{prefix}\n{text}"
 
-        chunk_id = generate_chunk_id(f"{doc_name}.pdf", content)
+        # 主键在 parse() 合并 text + image 后统一按文档内序号生成
+        chunk_id = ""
 
         metadata = ChunkMetadata(
             source_doc=f"{doc_name}.pdf",
@@ -325,12 +368,9 @@ class PDFProcessor:
                     ocr_text, section, related_text
                 )
 
-                # 构建 ImageMetadata
-                # 尝试相对路径，失败则用绝对路径
-                try:
-                    rel_path = str(img_path.relative_to(Path.cwd()))
-                except ValueError:
-                    rel_path = str(img_path)
+                # 构建 ImageMetadata：优先存仓库相对路径（正斜杠），
+                # 避免绝对路径/临时目录路径进入知识库。
+                rel_path = self._repo_relative_path(img_path)
                 image_meta = ImageMetadata(
                     image_id=f"{doc_name}_p{page_no}_{img_idx}",
                     page=page_no,
@@ -353,48 +393,110 @@ class PDFProcessor:
         return chunks
 
     def _run_ocr(self, image_path: str, image_bytes: bytes | None = None) -> str:
-        """对图片执行 OCR，支持 JSON 缓存，相同图片内容不重复识别。"""
-        # 计算图片内容哈希作为缓存键
+        """对图片执行 OCR，成功结果写缓存，失败结果只写失败记录。
+
+        设计要点（P0-2）：
+        - 失败结果**绝不**写入成功缓存，避免一次 OOM 变成永久性故障；
+        - 失败记录单独写 ``ocr_failed.json``，默认下次运行自动重试；
+        - 大图先降采样再送 OCR，降低 ONNX Runtime 内存峰值。
+        """
         if image_bytes is None:
             image_bytes = Path(image_path).read_bytes()
         cache_key = hashlib.md5(image_bytes).hexdigest()
 
-        # 命中缓存直接返回
+        # 命中成功缓存直接返回
         if cache_key in self._ocr_cache:
             return self._ocr_cache[cache_key]
 
+        # 上次失败且明确关闭重试时，不返回任何伪文本（更不返回 traceback）
+        if cache_key in self._ocr_failed and not self._retry_failed:
+            return ""
+
         try:
-            result, _ = self.ocr(image_path)
+            ocr_input = self._prepare_ocr_input(image_path, image_bytes)
+            result, _ = self.ocr(ocr_input)
             if not result:
                 ocr_text = ""
             else:
                 # result 格式: [[box, text, score], ...]
-                # 按 Y 坐标排序（从上到下），然后按 X 坐标（从左到右）
-                sorted_items = sorted(result, key=lambda item: (
-                    min(p[1] for p in item[0]),  # Y 坐标最小值
-                    min(p[0] for p in item[0]),  # X 坐标最小值
-                ))
-                texts = [item[1] for item in sorted_items]
-                ocr_text = "\n".join(texts)
+                # Y 轴按容差分行，行内按 X 排序，减少坐标抖动导致的顺序翻转
+                sorted_items = sorted(
+                    result,
+                    key=lambda item: (
+                        round(min(p[1] for p in item[0]) / _OCR_ROW_TOLERANCE),
+                        min(p[0] for p in item[0]),
+                    ),
+                )
+                lines = [str(item[1]).strip() for item in sorted_items]
+                ocr_text = self._normalize_ocr_lines(lines)
         except Exception as exc:
-            ocr_text = f"[OCR 失败: {exc}]"
+            # 关键：不把异常文本放进 content / embedding，也不写成功缓存
+            error = f"{type(exc).__name__}: {exc}"[:500]
+            self._ocr_failed[cache_key] = {
+                "error": error,
+                "image": str(image_path),
+                "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            self._failed_dirty = True
+            logger.warning("OCR failed for %s: %s", image_path, error)
+            return ""
 
-        # 写入缓存
         self._ocr_cache[cache_key] = ocr_text
+        self._ocr_failed.pop(cache_key, None)
         self._cache_dirty = True
+        self._failed_dirty = True
         return ocr_text
 
-    def _load_ocr_cache(self) -> dict:
-        """加载 OCR 缓存。"""
-        if self._cache_path.exists():
+    def _prepare_ocr_input(self, image_path: str, image_bytes: bytes) -> bytes:
+        """大图降采样后返回 JPEG bytes；小图直接返回原始 bytes。"""
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                if max(img.size) <= self._max_image_side:
+                    return image_bytes
+                img = img.convert("RGB")
+                img.thumbnail(
+                    (self._max_image_side, self._max_image_side),
+                    Image.Resampling.LANCZOS,
+                )
+                buffer = io.BytesIO()
+                img.save(buffer, format="JPEG", quality=90)
+                logger.info(
+                    "Downsampled OCR input %s -> %sx%s",
+                    Path(image_path).name,
+                    img.width,
+                    img.height,
+                )
+                return buffer.getvalue()
+        except Exception:
+            # 图片无法用 Pillow 打开时交给 RapidOCR 处理，由其抛错并记录失败
+            return image_bytes
+
+    @staticmethod
+    def _normalize_ocr_lines(lines: list[str]) -> str:
+        """清洗 OCR 行：去空行、压缩空白、去掉连续重复行。"""
+        cleaned: list[str] = []
+        for line in lines:
+            line = re.sub(r"\s+", " ", line).strip()
+            if not line:
+                continue
+            if cleaned and cleaned[-1] == line:
+                continue
+            cleaned.append(line)
+        return "\n".join(cleaned)
+
+    @staticmethod
+    def _load_json_dict(path: Path) -> dict:
+        """加载 JSON 字典，损坏时返回空字典。"""
+        if path.exists():
             try:
-                return json.loads(self._cache_path.read_text(encoding="utf-8"))
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {}
             except (json.JSONDecodeError, OSError):
                 return {}
         return {}
 
     def _save_ocr_cache(self) -> None:
-        """保存 OCR 缓存（仅在有变更时写入）。"""
+        """保存 OCR 成功缓存（仅在有变更时写入）。"""
         if self._cache_dirty:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
             self._cache_path.write_text(
@@ -402,6 +504,24 @@ class PDFProcessor:
                 encoding="utf-8",
             )
             self._cache_dirty = False
+
+    def _save_ocr_failed(self) -> None:
+        """保存 OCR 失败记录（独立文件，不参与成功缓存命中）。"""
+        if self._failed_dirty:
+            self._failed_path.parent.mkdir(parents=True, exist_ok=True)
+            self._failed_path.write_text(
+                json.dumps(self._ocr_failed, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self._failed_dirty = False
+
+    @staticmethod
+    def _repo_relative_path(path: Path) -> str:
+        """返回仓库相对路径（正斜杠）；不在仓库内时退回文件名。"""
+        try:
+            return path.resolve().relative_to(_PROJECT_ROOT).as_posix()
+        except ValueError:
+            return path.name
 
     def _get_page_text(self, doc: fitz.Document, page_idx: int) -> str:
         """获取指定页的文本内容（用于关联图片的上下文）。"""
@@ -437,12 +557,11 @@ class PDFProcessor:
             section_name = section.title if section else "未知"
             return f"{section_name}页面截图"
 
-        parts: List[str] = []
         section_name = section.title if section else ""
 
         # 提取可能的按钮名（2-4 个汉字的短语）
         buttons = self._extract_buttons(ocr_text)
-        # 提取字段标签（xxx: 格式）
+        # 提取字段标签（xxx: 格式），过滤纯数字/时间戳噪声
         fields = self._extract_fields(ocr_text)
 
         caption = f"{section_name}页面截图" if section_name else "页面截图"
@@ -454,33 +573,49 @@ class PDFProcessor:
         return caption
 
     def _extract_buttons(self, ocr_text: str) -> List[str]:
-        """从 OCR 文本中提取可能的按钮名称。"""
-        # 常见 ERP 按钮关键词
+        """从 OCR 文本中提取按钮名，按固定关键词顺序输出。
+
+        固定顺序保证同一张图两次 OCR 的 caption 顺序一致；同时优先保留
+        更长的关键词（``反审核`` 不再额外产出 ``审核``）。
+        """
         button_keywords = [
-            "新增", "保存", "审核", "删除", "编辑", "修改", "查询", "搜索",
-            "导出", "导入", "打印", "复制", "粘贴", "取消", "确认", "提交",
-            "反审核", "关联", "转单", "退回", "下一步", "上一步", "返回",
-            "批量", "全选", "刷新", "设置", "配置", "启用", "禁用",
+            "新增", "保存", "审核", "反审核", "删除", "编辑", "修改",
+            "查询", "搜索", "导出", "导入", "打印", "复制", "粘贴",
+            "取消", "确认", "提交", "关联", "转单", "退回", "下一步",
+            "上一步", "返回", "批量", "全选", "刷新", "设置", "配置",
+            "启用", "禁用",
         ]
-        found: List[str] = []
-        for line in ocr_text.split("\n"):
-            line = line.strip()
-            for kw in button_keywords:
-                if kw in line and len(line) <= 10:
-                    if kw not in found:
-                        found.append(kw)
-        return found
+        matched = [kw for kw in button_keywords if kw in ocr_text]
+        # 去掉被更长关键词包含的短词（审核 vs 反审核）
+        found = [
+            kw for kw in matched
+            if not any(kw != other and kw in other for other in matched)
+        ]
+        # 按固定关键词顺序输出
+        order = {kw: i for i, kw in enumerate(button_keywords)}
+        return sorted(found, key=lambda kw: order[kw])
 
     def _extract_fields(self, ocr_text: str) -> List[str]:
-        """从 OCR 文本中提取字段标签名。"""
-        fields: List[str] = []
+        """从 OCR 文本中提取字段标签名。
+
+        - 必须以汉字开头，避免 ``00``、``2023-09-06`` 等时间/数字噪声；
+        - 至少包含 2 个字符；
+        - 去重后按字典序输出，保证 caption 稳定。
+        """
+        pattern = re.compile(r"([\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9_]{1,7})\s*[:：]")
+        stopwords = {"http", "https", "www", "com", "cn"}
+        fields: set[str] = set()
         for line in ocr_text.split("\n"):
-            # 匹配 "字段名:" 或 "字段名：" 格式
-            matches = re.findall(r"([\u4e00-\u9fff\w]{2,8})\s*[:：]", line)
-            for match in matches:
-                if match not in fields:
-                    fields.append(match)
-        return fields
+            for match in pattern.findall(line):
+                value = match.strip()
+                if len(value) < 2:
+                    continue
+                if value.lower() in stopwords:
+                    continue
+                if not re.search(r"[\u4e00-\u9fff]", value):
+                    continue
+                fields.add(value)
+        return sorted(fields)
 
     def _find_section_for_page(
         self, sections: List[Section], page_no: int
@@ -516,7 +651,8 @@ class PDFProcessor:
 
         content = "\n".join(content_parts)
 
-        chunk_id = generate_chunk_id(f"{doc_name}.pdf", content)
+        # 主键在 parse() 合并 text + image 后统一按文档内序号生成
+        chunk_id = ""
 
         metadata = ChunkMetadata(
             source_doc=f"{doc_name}.pdf",

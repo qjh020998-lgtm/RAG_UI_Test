@@ -79,7 +79,8 @@ class TestAllDocuments:
             print(f"  {ct}: {count} ({count*100//len(all_chunks)}%)")
 
         # ==================== 导出 JSON ====================
-        output_path = Path(__file__).parent.parent / "cache" / "_all_chunks.json"
+        # P1-2：testself 只写 pytest tmp_path，禁止再产出 cache/_all_chunks.json
+        output_path = tmp_path / "all_chunks.json"
         export_data = {
             "total": len(all_chunks),
             "doc_stats": {doc: dict(stats) for doc, stats in doc_stats.items()},
@@ -99,6 +100,20 @@ class TestAllDocuments:
         assert type_counts["text"] >= 80, "过滤插件后应该至少有 80 个文本 chunk"
         assert type_counts["image"] > 70, "过滤插件后应该至少有 70 个图片 chunk"
         assert type_counts["table"] >= 30, "应该至少有 30 个表格 chunk"
+
+        # Phase 2.5 数据质量断言
+        ids = [c.chunk_id for c in all_chunks]
+        assert len(ids) == len(set(ids)), "chunk_id 必须全局唯一"
+        assert all(c.content_hash for c in all_chunks), "每个 chunk 必须有 content_hash"
+        assert all(
+            "OCR 失败" not in c.content and "Traceback" not in c.content
+            for c in all_chunks
+        ), "content 中不得残留 OCR 失败/traceback"
+        assert all(
+            not Path(c.image_metadata.image_path).is_absolute()
+            for c in all_chunks
+            if c.image_metadata
+        ), "image_path 必须是相对路径"
 
     def test_cross_document_module_coverage(self, processor, docs_dir):
         """测试跨文档的模块覆盖度。

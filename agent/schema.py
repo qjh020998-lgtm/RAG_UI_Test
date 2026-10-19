@@ -25,8 +25,9 @@ from agent.config import RAGConfig, get_rag_config
 
 # ── Collection 字段常量 ──────────────────────────────────────────────
 
-# VARCHAR 主键字段，格式: {doc_slug}_{md5(content)[:8]}，最长 32 字符
+# VARCHAR 主键字段，格式: {doc_slug}_{type}_{pXXX}_{iXXXX}，最长 32 字符
 CHUNK_ID_MAX_LEN = 32
+CONTENT_HASH_MAX_LEN = 16
 
 # 文本字段
 EMBEDDING_TEXT_MAX_LEN = 16384  # 用于嵌入的拼接文本
@@ -42,9 +43,10 @@ def get_collection_schema() -> CollectionSchema:
     """构建 erp_knowledge collection 的字段定义。
 
     字段设计说明：
-    - chunk_id: VARCHAR 主键，{doc_slug}_{hash} 格式，幂等且 ASCII-only
+    - chunk_id: 位置型 VARCHAR 主键（{doc_slug}_{type}_{pXXX}_{iXXXX}），ASCII-only、跨次稳定
     - embedding_text: 用于嵌入的文本（按 chunk_type 构造，与 content 不同）
     - content: 原始 chunk 完整内容，用于检索后返回给 LLM
+    - content_hash: 内容哈希，仅用于变更检测，不参与主键
     - metadata 字段: source_doc / module / chunk_type 等，用于过滤
     - dense_vector: 1024 维 BGE-M3 dense embedding
     - sparse_vector: BGE-M3 sparse embedding（由 Milvus BM25 函数自动生成时暂不使用，
@@ -59,7 +61,7 @@ def get_collection_schema() -> CollectionSchema:
             dtype=DataType.VARCHAR,
             max_length=CHUNK_ID_MAX_LEN,
             is_primary=True,
-            description="全局唯一标识: {doc_slug}_{md5[:8]}",
+            description="位置型主键: {doc_slug}_{type}_{pXXX}_{iXXXX}",
         ),
         # ── 文本字段 ──
         FieldSchema(
@@ -73,6 +75,12 @@ def get_collection_schema() -> CollectionSchema:
             dtype=DataType.VARCHAR,
             max_length=CONTENT_MAX_LEN,
             description="原始 chunk 完整内容",
+        ),
+        FieldSchema(
+            name="content_hash",
+            dtype=DataType.VARCHAR,
+            max_length=CONTENT_HASH_MAX_LEN,
+            description="md5(content)[:16]，用于变更检测，非主键",
         ),
         # ── 元数据字段（支持 metadata 过滤） ──
         FieldSchema(
@@ -160,13 +168,14 @@ SPARSE_INDEX_PARAMS = {
 class ChunkRecord(BaseModel):
     """Milvus 行数据模型，对应 collection 中的一条记录。
 
-    从 cache/_all_chunks.json 中的 DocumentChunk 转换而来，
+    从 cache/chunks.json 中的 DocumentChunk 转换而来，
     增加了 embedding_text 和向量字段。
     """
 
-    chunk_id: str = Field(description="全局唯一标识")
+    chunk_id: str = Field(description="位置型全局唯一标识")
     embedding_text: str = Field(description="用于嵌入的拼接文本")
     content: str = Field(description="原始 chunk 完整内容")
+    content_hash: str = Field(default="", description="md5(content)[:16]")
     source_doc: str = Field(description="源文档文件名")
     doc_title: str = Field(description="文档标题")
     module: str = Field(default="", description="业务模块")
@@ -190,6 +199,7 @@ class ChunkRecord(BaseModel):
             "chunk_id": self.chunk_id,
             "embedding_text": self.embedding_text,
             "content": self.content,
+            "content_hash": self.content_hash,
             "source_doc": self.source_doc,
             "doc_title": self.doc_title,
             "module": self.module,
@@ -231,6 +241,14 @@ def ensure_collection(config: RAGConfig | None = None) -> Collection:
         _create_indexes(collection)
     else:
         collection = Collection(name=collection_name)
+        # Phase 2.5: 旧 schema（无 content_hash）不能继续写入，必须显式重建
+        existing_fields = {field.name for field in collection.schema.fields}
+        if "content_hash" not in existing_fields:
+            raise RuntimeError(
+                f"Collection '{collection_name}' 是 Phase 2.5 之前的 schema，"
+                "缺少 content_hash 字段。请先执行 schema.drop_collection()，"
+                "再重新 ingest。"
+            )
         # 确保索引存在
         existing_indexes = {idx.field_name for idx in collection.indexes}
         if "dense_vector" not in existing_indexes:
@@ -277,16 +295,47 @@ def drop_collection(config: RAGConfig | None = None) -> None:
         utility.drop_collection(name)
 
 
+def list_modules(config: RAGConfig | None = None) -> list[str]:
+    """返回库内归一化后的 module 列表（供 Phase 3 自动过滤使用）。"""
+    if config is None:
+        config = get_rag_config()
+
+    collection = ensure_collection(config)
+    rows = collection.query(
+        expr="chunk_index >= 0",
+        output_fields=["module"],
+        limit=16384,
+    )
+    return sorted({row.get("module", "") for row in rows if row.get("module")})
+
+
 def get_collection_stats(config: RAGConfig | None = None) -> dict[str, Any]:
-    """获取 collection 统计信息（行数、分区等）。"""
+    """获取 collection 统计信息（逻辑行数、物理行数、分区等）。
+
+    注意：Milvus 的 ``num_entities`` 在 delete 后、compaction 前仍可能统计
+    旧版本（tombstone）；``logical_entities`` 用 ``count(*)`` 得到真实可见行数。
+    """
     if config is None:
         config = get_rag_config()
 
     connections.connect(alias="default", uri=config.milvus.uri)
     collection = Collection(config.milvus.collection_name)
     collection.flush()
+
+    logical = 0
+    try:
+        rows = collection.query(
+            expr="chunk_index >= 0",
+            output_fields=["count(*)"],
+        )
+        if rows:
+            logical = int(rows[0].get("count(*)", 0))
+    except Exception:
+        logical = collection.num_entities
+
     return {
         "name": config.milvus.collection_name,
         "num_entities": collection.num_entities,
+        "logical_entities": logical,
         "partitions": [p.name for p in collection.partitions],
     }

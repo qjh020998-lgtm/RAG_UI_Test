@@ -14,14 +14,32 @@ from tools.document.schema import DocumentChunk
 class DocumentProcessor:
     """统一文档处理器，支持 MD 和 PDF 格式。"""
 
-    def __init__(self, image_output_dir: str | Path = "knowledge-store/images"):
+    def __init__(
+        self,
+        image_output_dir: str | Path = "knowledge-store/images",
+        *,
+        retry_failed_ocr: bool = True,
+        ocr_cache_path: str | Path | None = None,
+        ocr_failed_path: str | Path | None = None,
+        max_image_side: int = 2000,
+    ):
         """初始化。
 
         Args:
             image_output_dir: PDF 图片输出目录
+            retry_failed_ocr: 是否重试上次失败的 OCR（失败结果不再写入成功缓存）
+            ocr_cache_path: OCR 成功缓存路径（默认 <项目根>/cache/ocr_cache.json）
+            ocr_failed_path: OCR 失败记录路径（默认 <项目根>/cache/ocr_failed.json）
+            max_image_side: 送 OCR 前的最长边上限（像素）
         """
         self.md_processor = MarkdownProcessor()
-        self.pdf_processor = PDFProcessor(image_output_dir=image_output_dir)
+        self.pdf_processor = PDFProcessor(
+            image_output_dir=image_output_dir,
+            retry_failed_ocr=retry_failed_ocr,
+            ocr_cache_path=ocr_cache_path,
+            ocr_failed_path=ocr_failed_path,
+            max_image_side=max_image_side,
+        )
 
     def process_file(self, file_path: str | Path) -> List[DocumentChunk]:
         """处理单个文档文件。
@@ -75,8 +93,7 @@ class DocumentProcessor:
                 except Exception as exc:
                     print(f"[WARNING] 处理 {file_path.name} 失败: {exc}")
 
-        # 全局重新编号
-        for idx, chunk in enumerate(all_chunks):
-            chunk.metadata.chunk_index = idx
-
+        # 注意：这里不再做跨文档全局重编号。
+        # chunk_index 是「文档内序号」，chunk_id 依赖它；若按目录处理顺序重编号，
+        # 新增/删除一个文档会改变后续文档的所有主键，破坏幂等性。
         return all_chunks

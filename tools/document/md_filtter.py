@@ -289,8 +289,13 @@ class MarkdownProcessor:
         prefix = f"[{doc_name}] [{module}] [{section}]"
         full_content = f"{prefix}\n\n{content}"
 
-        # 生成幂等 ASCII chunk_id
-        chunk_id = generate_chunk_id(f"{doc_name}.md", full_content)
+        # 位置型 ASCII 主键：MD 无页码，统一 p000
+        chunk_id = generate_chunk_id(
+            f"{doc_name}.md",
+            chunk_type,
+            page=0,
+            chunk_index=chunk_index,
+        )
 
         from tools.document.schema import ChunkMetadata
 

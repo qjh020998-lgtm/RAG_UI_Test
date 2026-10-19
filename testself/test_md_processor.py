@@ -141,7 +141,7 @@ class TestMarkdownProcessor:
         assert len(chunks) >= 30, "测试指南应该至少有 30 个 chunk"
         assert all(c.metadata.chunk_type == ChunkType.TEXT for c in chunks)
 
-    def test_all_md_documents_summary(self, md_processor, docs_dir):
+    def test_all_md_documents_summary(self, md_processor, docs_dir, tmp_path):
         """测试所有 MD 文档的综合统计。"""
         md_files = list(docs_dir.glob("*.md"))
         if not md_files:
@@ -178,7 +178,8 @@ class TestMarkdownProcessor:
             print(f"{stat['file']:<40} {stat['chunks']:>8} {types_str}")
 
         # 导出 JSONL 预览
-        output_path = Path(__file__).parent / "_md_chunks_preview.jsonl"
+        # P1-2：testself 只写 pytest tmp_path
+        output_path = tmp_path / "_md_chunks_preview.jsonl"
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("# Markdown 文档切分预览\n")
             f.write(f"# 总计: {len(md_files)} 个文件\n")

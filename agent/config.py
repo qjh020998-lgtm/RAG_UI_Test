@@ -56,9 +56,13 @@ class EmbeddingConfig(BaseSettings):
     )
     device: str = Field(default="cpu", description="推理设备: cpu / cuda")
     use_fp16: bool = Field(default=False, description="是否使用 FP16 推理（GPU 时推荐 True）")
-    batch_size: int = Field(default=32, description="批量嵌入的 batch 大小")
+    batch_size: int = Field(default=8, description="批量嵌入的 batch 大小（CPU 内存受限时调小）")
     dense_dim: int = Field(default=1024, description="Dense 向量维度")
     max_length: int = Field(default=8192, description="输入文本最大 token 长度")
+    num_threads: int = Field(
+        default=4,
+        description="PyTorch CPU 线程数；线程过多会显著抬高内存峰值",
+    )
 
 
 class LLMConfig(BaseSettings):
@@ -102,7 +106,10 @@ class SearchConfig(BaseSettings):
     dense_top_k: int = Field(default=20, description="Dense 召回粗排数量")
     sparse_top_k: int = Field(default=20, description="Sparse 召回粗排数量")
     rrf_k: int = Field(default=60, description="RRF 融合排序参数 k（值越大排序越平滑）")
-    score_threshold: float = Field(default=0.0, description="最低相关性分数阈值（0 为不过滤）")
+    score_threshold: float = Field(
+        default=0.52,
+        description="最低 dense cosine 相关性阈值（实测：有效查询 0.53~0.75，无关查询 0.42~0.51）",
+    )
 
 
 class RAGConfig(BaseSettings):
@@ -123,7 +130,7 @@ class RAGConfig(BaseSettings):
 
     # 数据路径
     chunks_file: str = Field(
-        default=str(PROJECT_ROOT / "cache" / "_all_chunks.json"),
+        default=str(PROJECT_ROOT / "cache" / "chunks.json"),
         description="全量 chunks 文件路径",
     )
     cache_dir: str = Field(

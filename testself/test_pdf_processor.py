@@ -124,7 +124,7 @@ class TestPDFProcessor:
         assert image_count > 5, "前 5 页应该有 5+ 张图片"
         assert len(ocr_samples) >= 2, "应该至少有 2 个 OCR 样本"
 
-    def test_full_pdf_processing(self, pdf_processor, pdf_file):
+    def test_full_pdf_processing(self, pdf_processor, pdf_file, tmp_path):
         """测试完整 PDF 处理流程（全量）。"""
         if not pdf_file.exists():
             pytest.skip(f"文件不存在: {pdf_file}")
@@ -174,7 +174,8 @@ class TestPDFProcessor:
 
         # 导出前 20 个 chunk 到 JSONL
         # 导出前 20 个 chunk 到格式化预览
-        output_path = Path(__file__).parent / "_pdf_chunks_preview.jsonl"
+        # P1-2：testself 只写 pytest tmp_path
+        output_path = tmp_path / "_pdf_chunks_preview.jsonl"
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("# PDF 文档切分预览\n")
             f.write(f"# 总计: {len(chunks)} 个 chunks\n")
