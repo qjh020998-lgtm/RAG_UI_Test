@@ -1,471 +1,213 @@
-"""Page Object 基类：定位、操作、等待、断言、弹窗、表格。
+import allure
+from playwright.sync_api import Page, Locator, expect
+from pw_core.driver.driver_manager import DriverManager
+from utils.logger import get_logger
 
-参考 astra 的 ``core/base_page.py``：BasePage 自身提供可复用的浏览器交互
-方法，Page 子类只写业务方法。定位统一走 Accessibility Tree 语义 API。
-"""
-
-from __future__ import annotations
-
-import re
-import time
-from pathlib import Path
-
-from playwright.sync_api import Locator, Page, expect
-
-from pw_core.conf import PlaywrightConfig
+log = get_logger(__name__)
 
 
 class BasePage:
-    """所有 Page Object 的基类。"""
+    """
+    所有页面对象的父类。
+    封装 Playwright 交互，提供日志记录、Allure 步骤和智能等待。
+    """
 
-    # ERP 常见组件容器的兜底选择器；优先使用 role，找不到时再退回这些组件类名。
-    TOAST_SELECTOR = (
-        "[role='alert'], .ant-message-notice-content, .el-message, "
-        ".Toastify__toast, .ant-notification-notice"
-    )
-    DIALOG_SELECTOR = (
-        "[role='dialog'], .ant-modal-content, .el-dialog, "
-        ".ant-drawer-content, .el-drawer__body"
-    )
-    TABLE_SELECTOR = "table, .ant-table, .el-table"
-    CONFIRM_BUTTON_PATTERN = re.compile(r"确定|确认|离开|放弃|是|保存")
-    CANCEL_BUTTON_PATTERN = re.compile(r"取消|留在此页|否|关闭")
+    def __init__(self):
+        self.driver_manager = DriverManager()
+        self.page: Page = self.driver_manager.get_driver().page
 
-    def __init__(
-        self,
-        page: Page,
-        base_url: str = "",
-        config: PlaywrightConfig | None = None,
-    ):
-        self.page = page
-        self.base_url = (base_url or "").rstrip("/")
-        self.config = config or PlaywrightConfig()
+    # ------------------------------------------------------------------
+    # 导航相关
+    # ------------------------------------------------------------------
 
-    # ── 导航 ───────────────────────────────────────────────────────
-
-    def navigate(self, url: str, wait_until: str = "load") -> None:
-        """导航到绝对 URL。"""
-        self.page.goto(url, wait_until=wait_until)
-
-    def open(self, path: str = "", wait_until: str = "load") -> None:
-        """导航到 ``base_url + path``；``path`` 也可以是绝对 URL。"""
-        if path.startswith(("http://", "https://")):
-            url = path
-        elif self.base_url:
-            url = f"{self.base_url}/{path.lstrip('/')}" if path else self.base_url
-        else:
-            url = path
-        self.navigate(url, wait_until=wait_until)
-
-    def get_url(self) -> str:
-        """返回当前 URL。"""
+    def get_current_url(self) -> str:
         return self.page.url
 
     def get_title(self) -> str:
-        """返回当前页面标题。"""
         return self.page.title()
 
-    def wait_for_load(self, state: str = "networkidle") -> None:
-        """等待页面加载状态。"""
-        self.page.wait_for_load_state(state)
+    def go_back(self):
+        log.debug("浏览器后退")
+        with allure.step("后退"):
+            self.page.go_back()
 
-    def wait_for_page_ready(
-        self,
-        selector: str | Locator | None = None,
-        state: str = "networkidle",
-        timeout: int | None = None,
-    ) -> None:
-        """等待页面加载完成，可选等待某个就绪元素。"""
-        self.page.wait_for_load_state(state, timeout=timeout)
-        if selector is None:
-            return
-        target = selector if isinstance(selector, Locator) else self.page.locator(selector)
-        target.first.wait_for(state="visible", timeout=timeout)
+    def refresh(self):
+        log.debug("刷新页面")
+        with allure.step("刷新页面"):
+            self.page.reload(wait_until="domcontentloaded")
 
-    def is_on_page(self, url_fragment: str) -> bool:
-        """当前 URL 包含 ``url_fragment`` 时返回 True。"""
-        return url_fragment in self.get_url()
+    # ------------------------------------------------------------------
+    # 元素获取
+    # ------------------------------------------------------------------
 
-    def reload(self) -> None:
-        """刷新当前页面。"""
-        self.page.reload()
+    def get_element(self, locator: str) -> Locator:
+        return self.page.locator(locator)
 
-    def go_back(self) -> None:
-        """浏览器后退。"""
-        self.page.go_back()
+    def get_elements(self, locator: str) -> Locator:
+        return self.page.locator(locator)
 
-    def go_forward(self) -> None:
-        """浏览器前进。"""
-        self.page.go_forward()
+    # ------------------------------------------------------------------
+    # 交互操作
+    # ------------------------------------------------------------------
 
-    def scroll_to_bottom(self) -> None:
-        """滚动到页面底部。"""
+    def click(self, locator: str, description: str = ""):
+        label = description or locator
+        log.info(f"点击: {label}")
+        with allure.step(f"点击 '{label}'"):
+            self.page.locator(locator).click()
+
+    def click_with_js(self, locator: str, description: str = ""):
+        label = description or locator
+        log.info(f"JS 点击: {label}")
+        with allure.step(f"JS 点击 '{label}'"):
+            self.page.locator(locator).evaluate("el => el.click()")
+
+    def fill(self, locator: str, value: str, description: str = "", sensitive: bool = False):
+        """
+        填写输入框。
+
+        参数:
+            locator: 元素定位器
+            value: 要填写的值
+            description: 操作描述（可选）
+            sensitive: 是否为敏感信息（如密码），True 时日志中会脱敏
+        """
+        label = description or locator
+        display_value = "***" if sensitive else value
+        log.info(f"填写 '{label}' 内容: {display_value}")
+        with allure.step(f"填写 '{label}' → '{display_value}'"):
+            self.page.locator(locator).fill(value)
+
+    def clear_and_fill(self, locator: str, value: str, description: str = "", sensitive: bool = False):
+        label = description or locator
+        display_value = "***" if sensitive else value
+        log.info(f"清空并填写 '{label}' 内容: {display_value}")
+        with allure.step(f"清空并填写 '{label}' → '{display_value}'"):
+            self.page.locator(locator).clear()
+            self.page.locator(locator).fill(value)
+
+    def press_key(self, locator: str, key: str):
+        log.debug(f"在 {locator} 上按下按键 '{key}'")
+        with allure.step(f"按下 '{key}'"):
+            self.page.locator(locator).press(key)
+
+    def select_option(self, locator: str, value: str, description: str = ""):
+        label = description or locator
+        log.info(f"在 '{label}' 中选择 '{value}'")
+        with allure.step(f"在 '{label}' 中选择 '{value}'"):
+            self.page.locator(locator).select_option(value)
+
+    def hover(self, locator: str, description: str = ""):
+        label = description or locator
+        log.debug(f"悬停在: {label}")
+        with allure.step(f"悬停 '{label}'"):
+            self.page.locator(locator).hover()
+
+    def scroll_into_view(self, locator: str):
+        self.page.locator(locator).scroll_into_view_if_needed()
+
+    def scroll_to_bottom(self):
         self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
-    # ── 定位器（A11y 优先） ────────────────────────────────────────
+    # ------------------------------------------------------------------
+    # 等待
+    # ------------------------------------------------------------------
 
-    def by_role(
-        self,
-        role: str,
-        name: str | None = None,
-        exact: bool | None = None,
-    ) -> Locator:
-        """通过 ARIA role 定位。"""
-        kwargs: dict = {}
-        if name is not None:
-            kwargs["name"] = name
-        if exact is not None:
-            kwargs["exact"] = exact
-        return self.page.get_by_role(role, **kwargs)
+    def wait_for_visible(self, locator: str, timeout: int = None):
+        kwargs = {"state": "visible"}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        self.page.locator(locator).wait_for(**kwargs)
 
-    def by_text(self, text: str, exact: bool = False) -> Locator:
-        """通过可见文本定位。"""
-        return self.page.get_by_text(text, exact=exact)
+    def wait_for_hidden(self, locator: str, timeout: int = None):
+        kwargs = {"state": "hidden"}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        self.page.locator(locator).wait_for(**kwargs)
 
-    def by_label(self, label: str, exact: bool | None = None) -> Locator:
-        """通过表单 label 定位。"""
-        kwargs: dict = {}
-        if exact is not None:
-            kwargs["exact"] = exact
-        return self.page.get_by_label(label, **kwargs)
+    def wait_for_url(self, url_pattern: str):
+        self.page.wait_for_url(url_pattern)
 
-    def by_placeholder(self, placeholder: str, exact: bool | None = None) -> Locator:
-        """通过 placeholder 定位。"""
-        kwargs: dict = {}
-        if exact is not None:
-            kwargs["exact"] = exact
-        return self.page.get_by_placeholder(placeholder, **kwargs)
+    def wait_for_load(self):
+        self.page.wait_for_load_state("domcontentloaded")
 
-    def by_test_id(self, test_id: str) -> Locator:
-        """通过 data-testid 定位。"""
-        return self.page.get_by_test_id(test_id)
+    # ------------------------------------------------------------------
+    # 读取值
+    # ------------------------------------------------------------------
 
-    def by_alt_text(self, alt: str, exact: bool | None = None) -> Locator:
-        """通过图片 alt 文本定位。"""
-        kwargs: dict = {}
-        if exact is not None:
-            kwargs["exact"] = exact
-        return self.page.get_by_alt_text(alt, **kwargs)
+    def get_text(self, locator: str) -> str:
+        text = self.page.locator(locator).inner_text()
+        log.debug(f"'{locator}' 的文本: {text}")
+        return text
 
-    def by_title(self, title: str, exact: bool | None = None) -> Locator:
-        """通过 title 属性定位。"""
-        kwargs: dict = {}
-        if exact is not None:
-            kwargs["exact"] = exact
-        return self.page.get_by_title(title, **kwargs)
+    def get_attribute(self, locator: str, attribute: str) -> str:
+        return self.page.locator(locator).get_attribute(attribute)
 
-    # ── 交互动作 ───────────────────────────────────────────────────
+    def get_value(self, locator: str) -> str:
+        return self.page.locator(locator).input_value()
 
-    def click(
-        self,
-        locator: Locator,
-        timeout: int | None = None,
-        force: bool = False,
-    ) -> None:
-        """点击元素。"""
-        locator.click(timeout=timeout, force=force)
+    def get_all_texts(self, locator: str) -> list[str]:
+        return self.page.locator(locator).all_inner_texts()
 
-    def double_click(self, locator: Locator, timeout: int | None = None) -> None:
-        """双击元素。"""
-        locator.dblclick(timeout=timeout)
+    def get_count(self, locator: str) -> int:
+        return self.page.locator(locator).count()
 
-    def fill(
-        self,
-        locator: Locator,
-        value: str,
-        timeout: int | None = None,
-    ) -> None:
-        """填写输入框（会先清空）。"""
-        locator.fill(value, timeout=timeout)
+    # ------------------------------------------------------------------
+    # 状态检查
+    # ------------------------------------------------------------------
 
-    def type_text(
-        self,
-        locator: Locator,
-        value: str,
-        delay: int = 0,
-        timeout: int | None = None,
-    ) -> None:
-        """逐字输入（不清空）。"""
-        locator.type(value, delay=delay, timeout=timeout)
+    def is_visible(self, locator: str) -> bool:
+        return self.page.locator(locator).is_visible()
 
-    def clear(self, locator: Locator, timeout: int | None = None) -> None:
-        """清空输入框。"""
-        locator.fill("", timeout=timeout)
+    def is_enabled(self, locator: str) -> bool:
+        return self.page.locator(locator).is_enabled()
 
-    def select_option(
-        self,
-        locator: Locator,
-        value: str | None = None,
-        label: str | None = None,
-        index: int | None = None,
-        timeout: int | None = None,
-    ) -> None:
-        """选择下拉框选项（value/label/index 三选一）。"""
-        if value is not None:
-            locator.select_option(value=value, timeout=timeout)
-        elif label is not None:
-            locator.select_option(label=label, timeout=timeout)
-        elif index is not None:
-            locator.select_option(index=index, timeout=timeout)
-        else:
-            raise ValueError("select_option 需要 value、label 或 index 之一")
+    def is_checked(self, locator: str) -> bool:
+        return self.page.locator(locator).is_checked()
 
-    def check(self, locator: Locator, timeout: int | None = None) -> None:
-        """勾选复选框。"""
-        locator.check(timeout=timeout)
+    # ------------------------------------------------------------------
+    # 断言
+    # ------------------------------------------------------------------
 
-    def uncheck(self, locator: Locator, timeout: int | None = None) -> None:
-        """取消勾选。"""
-        locator.uncheck(timeout=timeout)
+    def assert_visible(self, locator: str, message: str = ""):
+        log.debug(f"断言可见: {locator}")
+        with allure.step(f"断言可见: {message or locator}"):
+            expect(self.page.locator(locator)).to_be_visible()
 
-    def press_key(self, locator: Locator, key: str) -> None:
-        """在元素上按键。"""
-        locator.press(key)
+    def assert_hidden(self, locator: str, message: str = ""):
+        log.debug(f"断言隐藏: {locator}")
+        with allure.step(f"断言隐藏: {message or locator}"):
+            expect(self.page.locator(locator)).to_be_hidden()
 
-    def hover(self, locator: Locator) -> None:
-        """鼠标悬停。"""
-        locator.hover()
+    def assert_text(self, locator: str, expected: str):
+        log.debug(f"断言文本 '{expected}' 在: {locator}")
+        with allure.step(f"断言文本 = '{expected}'"):
+            expect(self.page.locator(locator)).to_have_text(expected)
 
-    def focus(self, locator: Locator) -> None:
-        """聚焦元素。"""
-        locator.focus()
+    def assert_text_contains(self, locator: str, expected: str):
+        log.debug(f"断言文本包含 '{expected}' 在: {locator}")
+        with allure.step(f"断言文本包含 '{expected}'"):
+            expect(self.page.locator(locator)).to_contain_text(expected)
 
-    def scroll_into_view(self, locator: Locator) -> None:
-        """滚动元素到可见区域。"""
-        locator.scroll_into_view_if_needed()
+    def assert_url_contains(self, partial_url: str):
+        import re
+        log.debug(f"断言 URL 包含: {partial_url}")
+        with allure.step(f"断言 URL 包含 '{partial_url}'"):
+            expect(self.page).to_have_url(re.compile(re.escape(partial_url)))
 
-    # ── 读取 ───────────────────────────────────────────────────────
+    def assert_title_contains(self, partial_title: str):
+        log.debug(f"断言标题包含: {partial_title}")
+        with allure.step(f"断言标题包含 '{partial_title}'"):
+            expect(self.page).to_have_title(f"*{partial_title}*")
 
-    def get_text(self, locator: Locator, timeout: int | None = None) -> str:
-        """返回元素 textContent。"""
-        return locator.text_content(timeout=timeout) or ""
+    def assert_count(self, locator: str, expected_count: int):
+        log.debug(f"断言数量 {expected_count} 对于: {locator}")
+        with allure.step(f"断言数量 = {expected_count}"):
+            expect(self.page.locator(locator)).to_have_count(expected_count)
 
-    def get_inner_text(self, locator: Locator, timeout: int | None = None) -> str:
-        """返回元素 innerText。"""
-        return locator.inner_text(timeout=timeout)
+    # ------------------------------------------------------------------
+    # 截图
+    # ------------------------------------------------------------------
 
-    def get_input_value(self, locator: Locator, timeout: int | None = None) -> str:
-        """返回输入框的值。"""
-        return locator.input_value(timeout=timeout)
-
-    def get_attribute(
-        self,
-        locator: Locator,
-        name: str,
-        timeout: int | None = None,
-    ) -> str | None:
-        """返回元素属性。"""
-        return locator.get_attribute(name, timeout=timeout)
-
-    def is_visible(self, locator: Locator) -> bool:
-        """元素是否可见。"""
-        return locator.is_visible()
-
-    def is_enabled(self, locator: Locator) -> bool:
-        """元素是否启用。"""
-        return locator.is_enabled()
-
-    def is_checked(self, locator: Locator) -> bool:
-        """复选框是否勾选。"""
-        return locator.is_checked()
-
-    def is_disabled(self, locator: Locator) -> bool:
-        """元素是否禁用。"""
-        return locator.is_disabled()
-
-    # ── 等待 ───────────────────────────────────────────────────────
-
-    def wait_for_url(self, url: str | None = None, timeout: int | None = None) -> None:
-        """等待 URL 变化。"""
-        if url:
-            self.page.wait_for_url(url, timeout=timeout)
-
-    def wait_for_selector(
-        self,
-        locator: Locator,
-        state: str = "visible",
-        timeout: int | None = None,
-    ) -> None:
-        """等待元素状态。"""
-        locator.wait_for(state=state, timeout=timeout)
-
-    def wait_for_visible(self, locator: Locator, timeout: int | None = None) -> None:
-        """等待元素可见。"""
-        locator.wait_for(state="visible", timeout=timeout)
-
-    def wait_for_hidden(self, locator: Locator, timeout: int | None = None) -> None:
-        """等待元素隐藏。"""
-        locator.wait_for(state="hidden", timeout=timeout)
-
-    # ── 断言 ───────────────────────────────────────────────────────
-
-    def assert_visible(self, locator: Locator, timeout: int = 5_000) -> None:
-        """断言元素可见。"""
-        expect(locator).to_be_visible(timeout=timeout)
-
-    def assert_hidden(self, locator: Locator, timeout: int = 5_000) -> None:
-        """断言元素隐藏。"""
-        expect(locator).to_be_hidden(timeout=timeout)
-
-    def assert_enabled(self, locator: Locator, timeout: int = 5_000) -> None:
-        """断言元素启用。"""
-        expect(locator).to_be_enabled(timeout=timeout)
-
-    def assert_disabled(self, locator: Locator, timeout: int = 5_000) -> None:
-        """断言元素禁用。"""
-        expect(locator).to_be_disabled(timeout=timeout)
-
-    def assert_text(
-        self,
-        locator: Locator,
-        expected: str,
-        timeout: int = 5_000,
-    ) -> None:
-        """断言元素包含文本。"""
-        expect(locator).to_contain_text(expected, timeout=timeout)
-
-    def assert_value(
-        self,
-        locator: Locator,
-        expected: str,
-        timeout: int = 5_000,
-    ) -> None:
-        """断言输入框包含值。"""
-        expect(locator).to_have_value(expected, timeout=timeout)
-
-    def assert_url_contains(self, fragment: str) -> None:
-        """断言当前 URL 包含片段。"""
-        current = self.get_url()
-        assert fragment in current, f"URL {current!r} 不包含 {fragment!r}"
-
-    def assert_text_visible(self, text: str, timeout: int = 5_000) -> None:
-        """断言页面存在可见文本。"""
-        expect(self.page.get_by_text(text, exact=False).first).to_be_visible(
-            timeout=timeout
-        )
-
-    # ── Toast ──────────────────────────────────────────────────────
-
-    @property
-    def toast(self) -> Locator:
-        """第一个可见 Toast/消息容器。"""
-        return self.page.locator(self.TOAST_SELECTOR).first
-
-    def wait_for_toast(
-        self,
-        text: str | None = None,
-        timeout: int = 8_000,
-    ) -> str:
-        """等待 Toast 出现并返回文本。"""
-        locator = self.page.locator(self.TOAST_SELECTOR)
-        if text:
-            locator = locator.filter(has_text=text)
-        locator.first.wait_for(state="visible", timeout=timeout)
-        return locator.first.inner_text()
-
-    def assert_toast(self, text: str, timeout: int = 8_000) -> None:
-        """断言包含指定文本的 Toast 可见。"""
-        locator = self.page.locator(self.TOAST_SELECTOR).filter(has_text=text)
-        expect(locator.first).to_be_visible(timeout=timeout)
-
-    # ── 弹窗 ───────────────────────────────────────────────────────
-
-    @property
-    def dialog(self) -> Locator:
-        """第一个可见弹窗/抽屉容器。"""
-        return self.page.locator(self.DIALOG_SELECTOR).first
-
-    def wait_for_dialog(
-        self,
-        text: str | None = None,
-        timeout: int = 8_000,
-    ) -> Locator:
-        """等待弹窗出现（可按文本过滤）。"""
-        locator = self.page.locator(self.DIALOG_SELECTOR)
-        if text:
-            locator = locator.filter(has_text=text)
-        locator.first.wait_for(state="visible", timeout=timeout)
-        return locator.first
-
-    def assert_dialog_visible(
-        self,
-        text: str | None = None,
-        timeout: int = 8_000,
-    ) -> None:
-        """断言弹窗可见。"""
-        locator = self.page.locator(self.DIALOG_SELECTOR)
-        if text:
-            locator = locator.filter(has_text=text)
-        expect(locator.first).to_be_visible(timeout=timeout)
-
-    def close_dialog(self, timeout: int = 5_000) -> None:
-        """点击弹窗内的取消/关闭按钮。"""
-        dialog = self.dialog
-        button = dialog.get_by_role("button", name=self.CANCEL_BUTTON_PATTERN)
-        if button.count() == 0:
-            button = dialog.locator("button").filter(has_text=self.CANCEL_BUTTON_PATTERN)
-        button.last.click(timeout=timeout)
-
-    def accept_next_dialog(self) -> None:
-        """接受下一个浏览器原生弹窗。"""
-        self.page.once("dialog", lambda dialog: dialog.accept())
-
-    def dismiss_next_dialog(self) -> None:
-        """关闭下一个浏览器原生弹窗。"""
-        self.page.once("dialog", lambda dialog: dialog.dismiss())
-
-    def handle_unsaved_changes(
-        self,
-        accept: bool = True,
-        timeout: int = 8_000,
-    ) -> None:
-        """处理“未保存离开”确认框。"""
-        dialog = self.wait_for_dialog(
-            text="未保存|离开|放弃|确认离开|确定离开",
-            timeout=timeout,
-        )
-        pattern = self.CONFIRM_BUTTON_PATTERN if accept else self.CANCEL_BUTTON_PATTERN
-        button = dialog.get_by_role("button", name=pattern)
-        if button.count() == 0:
-            button = dialog.locator("button").filter(has_text=pattern)
-        button.last.click(timeout=timeout)
-
-    # ── 表格 / 页面文本 ────────────────────────────────────────────
-
-    def get_table(self, scope: str | Locator | None = None) -> Locator:
-        """返回 scope 内（或整页）第一个表格。"""
-        root = self.page if scope is None else (
-            scope if isinstance(scope, Locator) else self.page.locator(scope)
-        )
-        return root.locator(self.TABLE_SELECTOR).first
-
-    def get_table_rows(self, scope: str | Locator | None = None) -> Locator:
-        """返回表格 tbody 行。"""
-        return self.get_table(scope).locator("tbody tr")
-
-    def get_page_text(self) -> str:
-        """返回页面可见文本。"""
-        return self.page.locator("body").inner_text()
-
-    # ── 截图 ───────────────────────────────────────────────────────
-
-    def take_screenshot(self, name: str, full_page: bool = False) -> str:
-        """截图到 ``artifacts/screenshots``。"""
-        screenshot_dir = Path(self.config.screenshot_dir)
-        screenshot_dir.mkdir(parents=True, exist_ok=True)
-        path = screenshot_dir / f"{name}.png"
-        self.page.screenshot(path=str(path), full_page=full_page)
-        return str(path.absolute())
-
-    def screenshot_on_failure(self, test_name: str | None = None) -> str | None:
-        """失败截图；异常不会覆盖原始失败。"""
-        safe_name = re.sub(r"[^0-9A-Za-z_.-]+", "_", test_name or "failure")[:120]
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        try:
-            return self.take_screenshot(f"{safe_name}-{timestamp}", full_page=True)
-        except Exception:
-            return None
-
-    def screenshot_path(self, name: str) -> Path:
-        """返回预期截图路径。"""
-        return Path(self.config.screenshot_dir) / f"{name}.png"
+    def take_screenshot(self, name: str = "screenshot") -> bytes:
+        return self.driver_manager.get_driver().take_screenshot(name)

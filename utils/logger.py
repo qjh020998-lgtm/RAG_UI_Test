@@ -5,6 +5,7 @@ from pathlib import Path
 LOG_DIR = Path(__file__).parent.parent / "reports"
 LOG_DIR.mkdir(exist_ok=True)
 
+
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
 
@@ -14,17 +15,15 @@ def get_logger(name: str) -> logging.Logger:
     logger.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
-        fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
+        fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # 控制台handler
     console = logging.StreamHandler(stream=sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
 
-    # 文件handler
-    file_handler = logging.FileHandler(LOG_DIR / "test_run.log", mode="a")
+    file_handler = logging.FileHandler(LOG_DIR / "test_run.log", mode="a", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
 

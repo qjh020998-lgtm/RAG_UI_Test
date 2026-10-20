@@ -22,6 +22,7 @@ dependencies = [
     "pillow>=10.0.0",
     # API driver for optional test-data setup
     "httpx>=0.28.0",
+    "allure-pytest>=2.16.2",
 ]
 
 [[index]]

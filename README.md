@@ -44,13 +44,15 @@ RAG_UI_Test/
 ├── tools/view_milvus_data.py  # Milvus 数据浏览与检索演示
 ├── page/                   # Page Object 层
 │   ├── base_page.py        # 兼容 shim，转发到 pw_core.base_page
-│   └── login_page.py       # 登录页
+│   ├── login_page.py       # 登录页
+│   └── purchase_page.py    # 采购管理列表页/新增弹窗
 ├── data/                   # 只放 YAML 测试数据
 │   ├── config.yaml         # base_url 等配置
 │   └── login_cases.yaml    # 登录测试数据
 ├── data_loader.py          # YAML 加载 + Pydantic 校验
 ├── testcases/              # 测试用例
-│   └── test_login.py       # 登录测试（parametrize）
+│   ├── test_login.py       # 登录测试（parametrize）
+│   └── test_purchase.py    # 采购管理 UI 测试（采购订单/入库/退货）
 ├── conftest.py             # 根级浏览器/context/page/auth fixtures
 ├── testself/               # 框架自测（文档处理、嵌入检索质量）
 ├── docs/                   # 业务文档（RAG 知识库来源）
@@ -91,6 +93,7 @@ pytest -m smoke
 
 # 运行特定测试文件
 pytest testcases/test_login.py
+pytest testcases/test_purchase.py
 
 # 只查看参数化展开结果（不启动浏览器）
 pytest --collect-only -q
