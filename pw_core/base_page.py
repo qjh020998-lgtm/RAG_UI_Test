@@ -1,3 +1,6 @@
+import re
+from urllib.parse import urlparse
+
 import allure
 from playwright.sync_api import Page, Locator, expect
 from pw_core.driver.driver_manager import DriverManager
@@ -35,6 +38,130 @@ class BasePage:
         log.debug("刷新页面")
         with allure.step("刷新页面"):
             self.page.reload(wait_until="domcontentloaded")
+
+    # ------------------------------------------------------------------
+    # 首页初始化 / 用例后置
+    # ------------------------------------------------------------------
+
+    def close_intro_guide(self) -> None:
+        """关闭 intro.js 新手引导遮罩；没有引导时立即返回。"""
+        guide = self.page.locator(".introjs-overlay, .introjs-tooltip")
+        if guide.count() == 0:
+            return
+
+        for selector in (
+            ".introjs-skipbutton",
+            ".introjs-donebutton",
+            ".introjs-tooltip [class*='close']",
+        ):
+            buttons = self.page.locator(selector)
+            for index in range(buttons.count()):
+                item = buttons.nth(index)
+                try:
+                    if item.is_visible():
+                        item.click(force=True)
+                        self.page.wait_for_timeout(200)
+                        break
+                except Exception:
+                    continue
+            if guide.count() == 0:
+                return
+
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_timeout(200)
+        if guide.count() == 0:
+            return
+
+        self.page.evaluate(
+            """() => {
+                try { if (window.introJs) window.introJs().exit(true); } catch (e) {}
+                document.querySelectorAll(
+                    '.introjs-overlay, .introjs-tooltipReferenceLayer, .introjs-helperLayer, .introjs-tooltip'
+                ).forEach(el => el.remove());
+                document.querySelectorAll('[aria-hidden="true"]').forEach(
+                    el => el.removeAttribute('aria-hidden')
+                );
+            }"""
+        )
+        self.page.wait_for_timeout(100)
+
+    def close_visible_modals(self) -> None:
+        """关闭当前可见的 Ant Design 弹窗，为回首页清场。"""
+        for _ in range(3):
+            wraps = self.page.locator(".ant-modal-wrap:visible")
+            if wraps.count() == 0:
+                return
+
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(200)
+            if self.page.locator(".ant-modal-wrap:visible").count() == 0:
+                return
+
+            close_buttons = self.page.locator(".ant-modal-close:visible")
+            if close_buttons.count():
+                try:
+                    close_buttons.first.click(force=True)
+                except Exception:
+                    pass
+                self.page.wait_for_timeout(200)
+                continue
+
+            for label in (r"取\s*消", r"关\s*闭"):
+                buttons = self.page.get_by_role("button", name=re.compile(label))
+                clicked = False
+                for index in range(buttons.count()):
+                    item = buttons.nth(index)
+                    try:
+                        if item.is_visible():
+                            item.click(force=True)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    break
+            self.page.wait_for_timeout(200)
+
+    @allure.step("回到 ERP 首页")
+    def back_to_home(self, home_url: str | None = None) -> None:
+        """关闭引导/弹窗并回到 ERP 首页，供用例后置和测试类初始化使用。"""
+        self.close_intro_guide()
+        self.close_visible_modals()
+
+        if home_url is None:
+            parsed = urlparse(self.page.url)
+            home_url = f"{parsed.scheme}://{parsed.netloc}/dashboard/analysis"
+
+        clicked = False
+        home_links = self.page.locator('a[href="/dashboard/analysis"]:visible')
+        if home_links.count():
+            try:
+                home_links.first.click()
+                clicked = True
+            except Exception:
+                clicked = False
+
+        if not clicked:
+            self.page.goto(home_url, wait_until="domcontentloaded")
+
+        try:
+            self.page.wait_for_url(
+                re.compile(r".*/dashboard/analysis.*"),
+                timeout=30000,
+            )
+        except Exception:
+            self.page.goto(home_url, wait_until="domcontentloaded")
+            self.page.wait_for_url(
+                re.compile(r".*/dashboard/analysis.*"),
+                timeout=30000,
+            )
+
+        self.page.locator(".ant-menu").first.wait_for(
+            state="visible",
+            timeout=30000,
+        )
+        self.page.evaluate("window.scrollTo(0, 0)")
+        log.info("已回到 ERP 首页")
 
     # ------------------------------------------------------------------
     # 元素获取

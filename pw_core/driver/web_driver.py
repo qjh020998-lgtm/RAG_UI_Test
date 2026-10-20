@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 from utils.config import Config
 from utils.logger import get_logger
@@ -13,7 +15,7 @@ class WebDriver:
         self._context: BrowserContext = None
         self._page: Page = None
 
-    def start(self, base_url: str = "") -> "WebDriver":
+    def start(self, base_url: str = "", storage_state=None) -> "WebDriver":
         url = base_url or Config.BASE_URL
         log.info(f"启动浏览器：{Config.BROWSER} | headless = {Config.HEADLESS} | base_url = {url}")
         self._playwright = sync_playwright().start()
@@ -24,16 +26,28 @@ class WebDriver:
             slow_mo=Config.SLOW_MO,
         )
 
-        self._context = self._browser.new_context(
-            base_url=url,
-            viewport={"width": 1440, "height": 900},
-            record_video_dir="reports/videos" if Config.VIDEO_ON_FAILURE else None,
-        )
+        context_kwargs = {
+            "base_url": url,
+            "viewport": {"width": 1440, "height": 900},
+            "record_video_dir": "reports/videos" if Config.VIDEO_ON_FAILURE else None,
+        }
+        if storage_state:
+            context_kwargs["storage_state"] = storage_state
+
+        self._context = self._browser.new_context(**context_kwargs)
 
         self._context.set_default_timeout(Config.TIMEOUT)
         self._page = self._context.new_page()
         log.info("浏览器启动成功")
         return self
+
+    def save_storage_state(self, path: str | Path) -> dict:
+        """保存当前 context 的 cookies + localStorage 快照。"""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        state = self._context.storage_state(path=str(target))
+        log.info(f"登录快照已保存：{target}")
+        return state
 
     def quit(self):
         log.info("关闭浏览器")

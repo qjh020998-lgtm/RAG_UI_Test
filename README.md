@@ -36,11 +36,11 @@ RAG_UI_Test/
 │   ├── conf.py             # 浏览器/API 配置
 │   ├── base_page.py        # 页面基类：定位/动作/等待/断言/弹窗/表格
 │   ├── base_test.py        # BaseTest + BasePage 契约检查
-│   └── driver/             # Web/API 驱动层
-│       ├── driver_factory.py
+│   └── driver/             # Web 驱动层
+│       ├── browser_session.py  # 测试类级浏览器
+│       ├── context_driver.py   # 用例 context/page 包装
 │       ├── driver_manager.py
-│       ├── web_driver.py
-│       └── api_client.py
+│       └── web_driver.py
 ├── tools/view_milvus_data.py  # Milvus 数据浏览与检索演示
 ├── page/                   # Page Object 层
 │   ├── base_page.py        # 兼容 shim，转发到 pw_core.base_page
@@ -102,7 +102,18 @@ pytest --collect-only -q
 pytest -v -s
 ```
 
-### 3. 调试
+### 3. 类级浏览器 / 页面复用
+
+- **测试类级浏览器**：每个测试类只启动一次 Chromium；同一测试类共用一个 `browser context` 和 `page`。
+- **类级前置**：`ensure_home()` 判断当前是否“已登录并进入 `/dashboard/analysis`”；
+  已登录直接通过，否则执行 UI 登录、保存 `storage_state` 快照，再进入首页。
+- **用例级复用**：同一测试类的所有用例共用同一个 page；每条用例开始前由 `home_guard` 再次确认首页。
+- **用例后置**：每条用例结束后调用 `BasePage.back_to_home()`，关闭引导/弹窗并回到
+  `/dashboard/analysis`，再执行下一条用例。
+- **登录用例例外**：`test_login.py` 标记 `@pytest.mark.no_auth`，在同一类级浏览器上新建干净
+  context/page，从登出状态开始，不参与共享首页。
+
+### 4. 调试
 
 ```bash
 # 显示浏览器窗口并放慢操作

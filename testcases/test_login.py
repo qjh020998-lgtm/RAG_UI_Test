@@ -10,8 +10,9 @@ LOGIN_CASES = load_login_cases()
 
 
 @pytest.mark.smoke
+@pytest.mark.no_auth
 class TestLogin:
-    """登录测试用例。"""
+    """登录测试用例：必须从登出状态开始，不复用 storage_state。"""
 
     @pytest.mark.parametrize(
         "case",
