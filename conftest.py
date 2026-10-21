@@ -199,12 +199,18 @@ def class_page(class_context):
 
 
 @pytest.fixture(scope="class")
-def class_driver(class_context, class_page, auth_config):
-    """整个测试类共用的 driver/page；类开始时完成登录+首页校验。"""
+def class_driver(class_context, class_page, auth_config, cleanup_registry: set[str]):
+    """整个测试类共用的 driver/page；类结束时清理已登记模块。"""
     driver = ContextDriver(class_context, class_page)
     DriverManager().set_driver(driver)
     _ensure_home(class_page, auth_config)
     yield driver
+
+    if cleanup_registry:
+        try:
+            _cleanup_registered_modules(class_page, cleanup_registry)
+        except Exception as exc:
+            log.warning(f"[cleanup] 类级清理异常，已忽略：{exc}")
 
 
 # -- 用例级 driver：登录类用例走 fresh context，其余复用类级 page --
@@ -297,39 +303,80 @@ def flow_data() -> dict:
     return {}
 
 
-# -- Purchase page fixtures --
+# -- 类级清理：page fixture 只登记，类结束时统一清理 --
+CLEANUP_ORDER = (
+    "purchase_back",
+    "purchase_in",
+    "purchase_order",
+    "purchase_apply",
+    "retail_back",
+    "retail_out",
+)
+
+
+def _cleanup_registered_modules(page: Page, modules: set[str]) -> None:
+    """按下游到上游顺序清理今日已审核/未审核数据；失败只告警。"""
+    if os.getenv("CLEANUP_ENABLED", "1").lower() in {"0", "false", "no"}:
+        return
+    dry_run = os.getenv("CLEANUP_DRY_RUN", "0").lower() in {"1", "true", "yes"}
+    cleaner = PurchasePage()
+    errors: list[str] = []
+    for module in CLEANUP_ORDER:
+        if module not in modules:
+            continue
+        try:
+            cleaner.cleanup_module(module, dry_run=dry_run)
+        except Exception as exc:
+            message = f"{module}: {exc}"
+            errors.append(message)
+            log.warning(f"[cleanup] 模块清理失败，已跳过：{message}")
+    if errors:
+        log.warning(f"[cleanup] 清理失败汇总：{errors}")
+
+
+@pytest.fixture(scope="class")
+def cleanup_registry() -> set[str]:
+    return set()
+
+
 @pytest.fixture()
-def purchase_apply_page(logged_in_page: Page) -> PurchasePage:
+def purchase_apply_page(logged_in_page: Page, cleanup_registry: set[str]) -> PurchasePage:
     """已登录并打开请购单列表。"""
+    cleanup_registry.add("purchase_apply")
     return PurchasePage().open_purchase_apply()
 
 
 @pytest.fixture()
-def purchase_page(logged_in_page: Page) -> PurchasePage:
+def purchase_page(logged_in_page: Page, cleanup_registry: set[str]) -> PurchasePage:
     """已登录并打开采购订单列表。"""
+    cleanup_registry.add("purchase_order")
     return PurchasePage().open_purchase_order()
 
 
 @pytest.fixture()
-def purchase_in_page(logged_in_page: Page) -> PurchasePage:
+def purchase_in_page(logged_in_page: Page, cleanup_registry: set[str]) -> PurchasePage:
     """已登录并打开采购入库列表。"""
+    cleanup_registry.add("purchase_in")
     return PurchasePage().open_purchase_in()
 
 
 @pytest.fixture()
-def purchase_back_page(logged_in_page: Page) -> PurchasePage:
+def purchase_back_page(logged_in_page: Page, cleanup_registry: set[str]) -> PurchasePage:
     """已登录并打开采购退货列表。"""
+    cleanup_registry.add("purchase_back")
     return PurchasePage().open_purchase_back()
 
 
 # -- Retail page fixtures --
 @pytest.fixture()
-def retail_out_page(logged_in_page: Page) -> RetailPage:
+def retail_out_page(logged_in_page: Page, cleanup_registry: set[str]) -> RetailPage:
     """已登录并打开零售出库列表。"""
+    cleanup_registry.add("retail_out")
     return RetailPage().open_retail_out()
 
 
 @pytest.fixture()
-def retail_back_page(logged_in_page: Page) -> RetailPage:
+def retail_back_page(logged_in_page: Page, cleanup_registry: set[str]) -> RetailPage:
     """已登录并打开零售退货列表。"""
+    cleanup_registry.add("retail_back")
     return RetailPage().open_retail_back()

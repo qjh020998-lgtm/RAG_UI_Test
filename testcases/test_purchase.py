@@ -1,9 +1,9 @@
 """采购管理页面 UI 用例。
 
-流程来源：docs/cases/ERP系统测试用例.xlsx
-001-028 每条一个 pytest 用例；026/027 明确 skip。
-006-008 为系统缺陷的特征化用例：当前系统未实现数量校验，用例按实际行为断言，
-并在 Allure 描述中标注“预期校验缺失”，避免掩盖缺陷。
+流程来源：docs/cases/ERP系统测试用例 (1).xlsx / 采购页
+001-039 每条一个 pytest 用例；026/035/036/038 明确 skip。
+006-007 为数量异常的特征化用例；008/039 为库存上限缺陷用例，
+按业务预期断言，系统未提示时应失败并暴露 Bug。
 """
 
 import allure
@@ -14,7 +14,7 @@ from page.purchase_page import PurchasePage
 
 @allure.feature("采购管理")
 class TestPurchase:
-    """请购单 -> 采购订单 -> 采购入库 -> 采购退货，共 28 条。"""
+    """请购单 -> 采购订单 -> 采购入库 -> 采购退货，共 39 条。"""
 
     # ------------------------------------------------------------------
     # 请购单 001-010
@@ -125,15 +125,35 @@ class TestPurchase:
     def test_purchase_007_quantity_negative(self, purchase_apply_page: PurchasePage) -> None:
         self._save_quantity_and_expect_saved(purchase_apply_page, "-1")
 
-    @allure.story("采购-008 数量超过库存")
-    @allure.description("缺陷：用例预期提示“库存不足”，当前系统未实现超库存拦截，按实际行为标记通过。")
+    @allure.story("采购-008 数量达到当前库存上限")
+    @allure.description(
+        "Bug 预期：商品选择弹窗显示库存，请购数量达到当前库存上限时应提示“库存已达上限”；"
+        "当前系统未拦截则判定为缺陷。"
+    )
     @pytest.mark.regression
     @pytest.mark.web
-    def test_purchase_008_quantity_over_stock(
+    def test_purchase_008_quantity_at_stock_limit(
         self,
         purchase_apply_page: PurchasePage,
     ) -> None:
-        self._save_quantity_and_expect_saved(purchase_apply_page, "10000")
+        page = purchase_apply_page
+        page.open_add_modal()
+        page.open_product_selector(0)
+        page.choose_product("西瓜1号", mode="dblclick")
+        stock_text = page.get_last_product_stock()
+        assert stock_text.isdigit(), f"采购-008 未读取到商品库存：{stock_text!r}"
+        stock = int(stock_text)
+        assert stock > 0, f"采购-008 商品库存异常：{stock}"
+        page.fill_editable_quantity(stock)
+        page.click_save_only()
+        page.page.wait_for_timeout(800)
+        assert page.page.locator(".ant-modal:visible").count() > 0, (
+            f"采购-008 Bug：数量等于库存上限 {stock} 仍保存成功，弹窗关闭"
+        )
+        messages = " ".join(page.get_messages())
+        assert any(word in messages for word in ("库存", "上限", "已达", "超过")), (
+            f"采购-008 数量达到库存上限未提示，实际：{messages}"
+        )
 
     @allure.story("采购-009 审核请购单")
     @pytest.mark.e2e
@@ -789,3 +809,33 @@ class TestPurchase:
     @pytest.mark.skip(reason="采购-038 工作簿标注跳过：需切换无权限仓库账号，当前环境不具备")
     def test_purchase_038_warehouse_permission(self) -> None:
         pass
+
+    @allure.story("采购-039 数量超过当前库存上限")
+    @allure.description(
+        "Bug 预期：商品选择弹窗显示库存，请购数量超过当前库存上限 1 时应提示库存已达上限；"
+        "当前系统未拦截则判定为缺陷。"
+    )
+    @pytest.mark.regression
+    @pytest.mark.web
+    def test_purchase_039_quantity_over_stock_limit(
+        self,
+        purchase_apply_page: PurchasePage,
+    ) -> None:
+        page = purchase_apply_page
+        page.open_add_modal()
+        page.open_product_selector(0)
+        page.choose_product("西瓜1号", mode="dblclick")
+        stock_text = page.get_last_product_stock()
+        assert stock_text.isdigit(), f"采购-039 未读取到商品库存：{stock_text!r}"
+        stock = int(stock_text)
+        assert stock > 0, f"采购-039 商品库存异常：{stock}"
+        page.fill_editable_quantity(stock + 1)
+        page.click_save_only()
+        page.page.wait_for_timeout(800)
+        assert page.page.locator(".ant-modal:visible").count() > 0, (
+            f"采购-039 Bug：数量超过库存上限 {stock} 仍保存成功，弹窗关闭"
+        )
+        messages = " ".join(page.get_messages())
+        assert any(word in messages for word in ("库存", "上限", "已达", "超过")), (
+            f"采购-039 超过库存上限未提示，实际：{messages}"
+        )

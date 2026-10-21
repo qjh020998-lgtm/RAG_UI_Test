@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import date
 from typing import Iterable
 
 import allure
@@ -26,6 +27,15 @@ class PurchasePage(BasePage):
     ORDER_PATH = "/bill/purchase_order"
     IN_PATH = "/bill/purchase_in"
     BACK_PATH = "/bill/purchase_back"
+    CLEANUP_PATHS = {
+        "purchase_apply": "/bill/purchase_apply",
+        "purchase_order": "/bill/purchase_order",
+        "purchase_in": "/bill/purchase_in",
+        "purchase_back": "/bill/purchase_back",
+        "retail_out": "/bill/retail_out",
+        "retail_back": "/bill/retail_back",
+    }
+    CLEANUP_MAX_LOOPS = 30
 
     # 只在可见表格内定位，避免命中详情弹窗里的隐藏表格
     TABLE = ".ant-table:visible"
@@ -39,6 +49,7 @@ class PurchasePage(BasePage):
     def __init__(self) -> None:
         super().__init__()
         self.base_url = load_config().base_url.rstrip("/")
+        self.last_product_stock = ""
 
     # ------------------------------------------------------------------
     # 基础工具
@@ -225,15 +236,26 @@ class PurchasePage(BasePage):
         cells = row.locator("td")
         for index in range(cells.count()):
             text = cells.nth(index).inner_text().strip()
-            match = re.search(r"(CGDD|CGRK|CGTH|QGD)\d{5,}", text)
+            match = re.search(r"(CGDD|CGRK|CGTH|QGD|LSCK|LSTH)\d{5,}", text)
             if match:
                 # 单元格可能带 [请]/[转] 后缀，查询时只取纯单号
                 return match.group(0)
 
-        match = re.search(r"(CGDD|CGRK|CGTH|QGD)\d{5,}", row.inner_text())
+        match = re.search(r"(CGDD|CGRK|CGTH|QGD|LSCK|LSTH)\d{5,}", row.inner_text())
         if match:
             return match.group(0)
         raise AssertionError(f"第一行未找到单据编号：{row.inner_text()[:200]}")
+
+    def get_visible_bill_numbers(self) -> set[str]:
+        """当前可见列表行的单据号集合，用于判断批量操作是否推进。"""
+        numbers: set[str] = set()
+        rows = self.get_rows()
+        for index in range(rows.count()):
+            row_text = rows.nth(index).inner_text()
+            numbers.update(
+                re.findall(r"(?:CGDD|CGRK|CGTH|QGD|LSCK|LSTH)\d{5,}", row_text)
+            )
+        return numbers
 
     @allure.step("按单据编号查询：{number}")
     def search_by_number(self, number: str) -> None:
@@ -410,13 +432,18 @@ class PurchasePage(BasePage):
         exclude: str | None = None,
     ) -> bool:
         """按按钮 inner_text 点击（兼容 Ant Design 插入空格）。"""
+        text_norm = text.replace(" ", "")
+        exclude_norm = exclude.replace(" ", "") if exclude else None
         for index in range(scope.locator("button:visible").count()):
             button = scope.locator("button:visible").nth(index)
             try:
                 label = button.inner_text().strip()
             except Exception:
                 continue
-            if text in label and (exclude is None or exclude not in label):
+            label_norm = label.replace(" ", "")
+            if text_norm in label_norm and (
+                exclude_norm is None or exclude_norm not in label_norm
+            ):
                 button.click()
                 return True
         return False
@@ -510,6 +537,27 @@ class PurchasePage(BasePage):
             self.page.wait_for_timeout(300)
         raise AssertionError("商品选择弹窗未打开")
 
+    def _read_product_stock(self, product: Locator, row: Locator) -> None:
+        """从商品选择弹窗的“库存”列读取当前商品库存。"""
+        try:
+            headers = product.locator(".ant-table-thead th")
+            header_texts = [
+                headers.nth(i).inner_text().strip()
+                for i in range(headers.count())
+            ]
+            index = header_texts.index("库存")
+            cell_text = row.locator("td").nth(index).inner_text().strip()
+            match = re.search(r"[\d,]+(?:\.\d+)?", cell_text)
+            self.last_product_stock = match.group(0).replace(",", "") if match else ""
+            log.info(f"activating 读取商品库存 {self.last_product_stock}")
+            self.last_product_stock = match.group(0).replace(",", "") if match else ""
+        except Exception as exc:
+            log.warning(f"读取商品库存失败：{exc}")
+            self.last_product_stock = ""
+
+    def get_last_product_stock(self) -> str:
+        return self.last_product_stock
+
     @allure.step("搜索并选择商品：{keyword}")
     def choose_product(self, keyword: str, mode: str = "dblclick") -> None:
         log.info(f"activating 选择商品 {keyword} mode={mode}")
@@ -533,6 +581,7 @@ class PurchasePage(BasePage):
             log.warning(f"商品查询无结果，重试 {attempt + 1}/3：{keyword}")
             self.page.wait_for_timeout(800)
         assert rows.count() > 0, f"商品查询无结果：{keyword}（已重试 3 次）"
+        self._read_product_stock(product, rows.first)
         if mode == "dblclick":
             rows.first.dblclick()
         else:
@@ -791,3 +840,214 @@ class PurchasePage(BasePage):
         ).first
         locator.fill(str(value))
         self.page.wait_for_timeout(300)
+
+    # ------------------------------------------------------------------
+    # 类级测试数据清理
+    # ------------------------------------------------------------------
+
+    def open_cleanup_module(self, module_key: str) -> "PurchasePage":
+        path = self.CLEANUP_PATHS.get(module_key)
+        if not path:
+            raise RuntimeError(f"未知清理模块：{module_key}")
+        log.info(f"activating 清理模块 {module_key}")
+        return self._open(path)
+
+    def _search_panel(self) -> Locator:
+        return self.page.locator(".table-page-search-wrapper:visible").first
+
+    def _status_form_item(self) -> Locator:
+        panel = self._search_panel()
+        for label in ("单据状态", "状态"):
+            item = panel.locator(".ant-form-item").filter(has_text=label)
+            if item.count():
+                return item.first
+        return panel.locator(".ant-form-item").filter(has_text="___not_found___")
+
+    def expand_search_filters(self) -> None:
+        self.dismiss_guide()
+        if self._status_form_item().count():
+            return
+        toggle = self.page.get_by_text(re.compile(r"展\s*开")).filter(visible=True)
+        log.info(f"清理展开按钮数量={toggle.count()}")
+        if toggle.count():
+            toggle.first.click()
+            self.page.wait_for_timeout(800)
+        if not self._status_form_item().count():
+            panel = self._search_panel()
+            labels = [panel.locator("label").nth(i).inner_text() for i in range(panel.locator("label").count())]
+            selects = [panel.locator(".ant-select").nth(i).inner_text() for i in range(panel.locator(".ant-select").count())]
+            log.info(f"清理搜索面板 labels={labels}, selects={selects}, text={panel.inner_text()[:500]}")
+            raise RuntimeError("列表展开后未找到“单据状态”筛选")
+
+    def set_today_range(self) -> None:
+        """将单据日期设置为今天~今天；失败则抛错，避免误删历史数据。"""
+        today = date.today().strftime("%Y-%m-%d")
+        inputs = self.page.locator("input.ant-calendar-range-picker-input:visible")
+        if inputs.count() < 2:
+            raise RuntimeError("列表未找到单据日期范围控件")
+        start, end = inputs.nth(0), inputs.nth(1)
+
+        # 日期范围输入框是 readonly，直接点击打开日历，再操作日历内的输入框
+        try:
+            start.click(force=True)
+            self.page.wait_for_timeout(500)
+            panel = self.page.locator(".ant-calendar-picker-container:visible").last
+            if panel.count():
+                panel.locator("input.ant-calendar-input").first.fill(today)
+                panel.locator("input.ant-calendar-input").first.press("Enter")
+                self.page.wait_for_timeout(400)
+
+            end.click(force=True)
+            self.page.wait_for_timeout(500)
+            panel = self.page.locator(".ant-calendar-picker-container:visible").last
+            if panel.count():
+                panel.locator("input.ant-calendar-input").first.fill(today)
+                panel.locator("input.ant-calendar-input").first.press("Enter")
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(400)
+            if start.input_value().strip() == today and end.input_value().strip() == today:
+                log.info(f"activating 清理日期范围 {today} ~ {today}")
+                return
+        except Exception as exc:
+            log.warning(f"日期输入失败，尝试日历选择：{exc}")
+
+        # 回退：通过日历中的今天单元格选择
+        try:
+            start.click(force=True)
+            self.page.wait_for_timeout(300)
+            panel = self.page.locator(".ant-calendar-picker-container:visible").last
+            today_cell = panel.locator(f"td[title='{today}'], .ant-calendar-date[title='{today}']")
+            if not today_cell.count():
+                raise RuntimeError(f"日历中未找到今天：{today}")
+            today_cell.first.click()
+            end.click(force=True)
+            self.page.wait_for_timeout(300)
+            panel = self.page.locator(".ant-calendar-picker-container:visible").last
+            today_cell = panel.locator(f"td[title='{today}'], .ant-calendar-date[title='{today}']")
+            today_cell.last.click()
+            self.page.keyboard.press("Escape")
+            self.page.wait_for_timeout(300)
+            if start.input_value().strip() == today and end.input_value().strip() == today:
+                log.info(f"activating 清理日期范围 {today} ~ {today}")
+                return
+        except Exception as exc:
+            raise RuntimeError(f"设置今天日期范围失败：{exc}") from exc
+
+        raise RuntimeError(
+            f"设置今天日期范围失败：开始={start.input_value()!r}, 结束={end.input_value()!r}"
+        )
+
+    def select_bill_status(self, status: str) -> None:
+        self.dismiss_guide()
+        item = self._status_form_item()
+        if not item.count():
+            raise RuntimeError("未找到单据状态筛选项")
+        select = item.locator(".ant-select").first
+        select.click()
+        self.page.wait_for_timeout(400)
+        options = self.page.locator(".ant-select-dropdown:visible li")
+        target = options.filter(has_text=status).first
+        if not target.count():
+            raise RuntimeError(f"单据状态下拉未找到：{status}")
+        target.click()
+        self.page.wait_for_timeout(300)
+        log.info(f"activating 清理状态筛选 {status}")
+
+    def click_search(self) -> None:
+        self._click_button(re.compile(r"查\s*询"))
+        self._wait_table_idle()
+        self.page.wait_for_timeout(300)
+
+    def select_all_current_page(self) -> int:
+        rows = self.get_rows()
+        count = rows.count()
+        if count == 0:
+            return 0
+        header = self.page.locator(f"{self.TABLE} thead input[type=checkbox]").first
+        if not header.count():
+            raise RuntimeError("表格未找到全选复选框")
+        if not header.is_checked():
+            header.check(force=True)
+            self.page.wait_for_timeout(300)
+        selected = self.page.locator(
+            f"{self.TABLE} tbody tr.ant-table-row input[type=checkbox]:checked"
+        ).count()
+        if selected < count:
+            raise RuntimeError(f"全选未生效：行数={count}, 已选={selected}")
+        log.info(f"activating 当前页全选 {count} 行")
+        return count
+
+    def batch_unaudit(self) -> None:
+        if not self._click_visible_text_button(self.page, "反审核"):
+            raise RuntimeError("未找到反审核按钮")
+        self.page.wait_for_timeout(500)
+        self.confirm_popup()
+        self.page.wait_for_timeout(1000)
+        log.info("activating 批量反审核")
+
+    def batch_delete(self) -> None:
+        if not self._click_visible_text_button(self.page, "删除"):
+            raise RuntimeError("未找到删除按钮")
+        self.page.wait_for_timeout(500)
+        self.confirm_popup()
+        self.page.wait_for_timeout(1000)
+        log.info("activating 批量删除")
+
+    def cleanup_module(self, module_key: str, dry_run: bool = False) -> dict:
+        """清理今日已审核/未审核单据；其他状态跳过并记录。"""
+        self.open_cleanup_module(module_key)
+        self.expand_search_filters()
+        self.set_today_range()
+        self.select_bill_status("已审核")
+        self.click_search()
+
+        audited = 0
+        for _ in range(self.CLEANUP_MAX_LOOPS):
+            count = self.select_all_current_page()
+            if count == 0:
+                break
+            if dry_run:
+                audited += count
+                log.info(f"[cleanup dry-run] {module_key} 已审核待反审核 {count} 条")
+                break
+            before_numbers = self.get_visible_bill_numbers()
+            self.batch_unaudit()
+            audited += count
+            self.click_search()
+            after_numbers = self.get_visible_bill_numbers()
+            if before_numbers and before_numbers == after_numbers:
+                raise RuntimeError(
+                    f"{module_key} 反审核后当前页单据未变化，停止清理"
+                )
+
+        self.select_bill_status("未审核")
+        self.click_search()
+        deleted = 0
+        for _ in range(self.CLEANUP_MAX_LOOPS):
+            count = self.select_all_current_page()
+            if count == 0:
+                break
+            if dry_run:
+                deleted += count
+                log.info(f"[cleanup dry-run] {module_key} 未审核待删除 {count} 条")
+                break
+            before_numbers = self.get_visible_bill_numbers()
+            self.batch_delete()
+            deleted += count
+            self.click_search()
+            after_numbers = self.get_visible_bill_numbers()
+            if before_numbers and before_numbers == after_numbers:
+                raise RuntimeError(
+                    f"{module_key} 删除后当前页单据未变化，停止清理"
+                )
+
+        remaining = self.get_status_tag_texts()
+        skipped = sorted(set(remaining) - {"未审核", "已审核"})
+        result = {
+            "module": module_key,
+            "audited": audited,
+            "deleted": deleted,
+            "remaining_statuses": skipped,
+        }
+        log.info(f"[cleanup] {result}")
+        return result
