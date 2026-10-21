@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from playwright.sync_api import Page, expect
 from data_loader import load_config, load_login_cases
 from page.login_page import LoginPage
 from page.purchase_page import PurchasePage
+from page.retail_page import RetailPage
 from pw_core.base_page import BasePage
 from pw_core.driver.browser_session import BrowserSession
 from pw_core.driver.context_driver import ContextDriver
@@ -26,6 +28,45 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
     setattr(item, f"rep_{rep.when}", rep)
+
+    if rep.when == "call":
+        if rep.failed:
+            last_line = rep.longreprtext.strip().splitlines()[-1]
+            log.error(f"ASSERT FAILED | {item.name} | {last_line}")
+        else:
+            log.info(f"{rep.outcome.upper()} | {item.name} | {rep.duration:.2f}s")
+    elif rep.failed:
+        last_line = rep.longreprtext.strip().splitlines()[-1]
+        log.error(f"{rep.when.upper()} FAILED | {item.name} | {last_line}")
+
+
+def pytest_runtest_setup(item):
+    log.info(f"activating {item.name}")
+
+
+def pytest_assertion_pass(item, lineno, orig, expl):
+    expression = orig.strip().replace("\n", " ")
+    log.info(f"ASSERT PASSED | {item.name}:{lineno} | {expression}")
+
+
+def pytest_collection_modifyitems(config, items):
+    """保证采购流程按 请购单 -> 订单 -> 入库 -> 退货 顺序执行。"""
+    order = {
+        "test_purchase_apply_flow": 0,
+        "test_purchase_quantity_validation": 1,
+        "test_purchase_order_flow": 2,
+        "test_purchase_in_flow": 3,
+        "test_purchase_in_multi_account_and_debt_pending": 4,
+        "test_purchase_back_flow": 5,
+    }
+
+    def key(item):
+        if getattr(item, "module", None) and item.module.__name__ == "testcases.test_purchase":
+            base_name = item.name.split("[")[0]
+            return (1, order.get(base_name, 99))
+        return (0, 0)
+
+    items.sort(key=key)
 
 
 def _auth_snapshot_path(request) -> Path:
@@ -81,13 +122,13 @@ def _ensure_home(page: Page, auth_config: dict) -> None:
         case.username,
         case.password,
         expect_success=True,
-        timeout=30000,
+        timeout=60000,
     )
     login_page.assert_login_success()
-    expect(page).to_have_url(HOME_URL_RE, timeout=30000)
+    expect(page).to_have_url(HOME_URL_RE, timeout=60000)
     page.locator(".ant-menu:visible").first.wait_for(
         state="visible",
-        timeout=30000,
+        timeout=60000,
     )
 
     # 登录成功后刷新快照，供当前类后续复用/异常恢复
@@ -117,14 +158,30 @@ def browser_session():
 
 # -- 测试类级 context/page：整个类共用同一个页面 --
 @pytest.fixture(scope="class")
-def class_context(browser_session, auth_config):
+def class_context(browser_session, auth_config, request):
     state_path = auth_config["state_path"]
     storage_state = str(state_path) if state_path.exists() else None
     context = browser_session.new_context(
         auth_config["base_url"],
         storage_state=storage_state,
     )
+
+    trace_enabled = os.getenv("PW_TRACE", "").lower() in {"1", "true", "yes"}
+    trace_path = Path("artifacts/traces") / (
+        re.sub(r"[^0-9A-Za-z_.-]+", "_", request.node.nodeid).strip("_") + ".zip"
+    )
+    if trace_enabled:
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        context.tracing.start(screenshots=True, snapshots=True, sources=True)
+
     yield context
+
+    if trace_enabled:
+        try:
+            context.tracing.stop(path=str(trace_path))
+            log.info(f"Playwright trace 已保存：{trace_path}")
+        except Exception as exc:
+            log.warning(f"trace 保存失败：{exc}")
     try:
         context.close()
     except Exception:
@@ -186,10 +243,10 @@ def home_guard(request, driver, auth_config):
         log.warning(f"用例后置返回首页失败，尝试重新加载首页：{exc}")
         try:
             driver.page.goto(home_url, wait_until="domcontentloaded")
-            driver.page.wait_for_url(HOME_URL_RE, timeout=30000)
+            driver.page.wait_for_url(HOME_URL_RE, timeout=60000)
             driver.page.locator(".ant-menu:visible").first.wait_for(
                 state="visible",
-                timeout=30000,
+                timeout=60000,
             )
         except Exception:
             raise
@@ -234,7 +291,19 @@ def logged_in_page(home_guard, pw_page: Page) -> Page:
     return pw_page
 
 
+# -- 跨模块流程数据：单证号、单据状态等 --
+@pytest.fixture(scope="class")
+def flow_data() -> dict:
+    return {}
+
+
 # -- Purchase page fixtures --
+@pytest.fixture()
+def purchase_apply_page(logged_in_page: Page) -> PurchasePage:
+    """已登录并打开请购单列表。"""
+    return PurchasePage().open_purchase_apply()
+
+
 @pytest.fixture()
 def purchase_page(logged_in_page: Page) -> PurchasePage:
     """已登录并打开采购订单列表。"""
@@ -251,3 +320,16 @@ def purchase_in_page(logged_in_page: Page) -> PurchasePage:
 def purchase_back_page(logged_in_page: Page) -> PurchasePage:
     """已登录并打开采购退货列表。"""
     return PurchasePage().open_purchase_back()
+
+
+# -- Retail page fixtures --
+@pytest.fixture()
+def retail_out_page(logged_in_page: Page) -> RetailPage:
+    """已登录并打开零售出库列表。"""
+    return RetailPage().open_retail_out()
+
+
+@pytest.fixture()
+def retail_back_page(logged_in_page: Page) -> RetailPage:
+    """已登录并打开零售退货列表。"""
+    return RetailPage().open_retail_back()

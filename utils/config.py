@@ -17,6 +17,11 @@ class Config:
     SLOW_MO: int = int(os.getenv("SLOW_MO", "0"))
     TIMEOUT: int = int(os.getenv("TIMEOUT", "30000"))
 
+    # 浏览器窗口/视口
+    FULLSCREEN: bool = os.getenv("FULLSCREEN", "true").lower() == "true"
+    VIEWPORT_WIDTH: int = int(os.getenv("VIEWPORT_WIDTH", "1920"))
+    VIEWPORT_HEIGHT: int = int(os.getenv("VIEWPORT_HEIGHT", "1080"))
+
     # 产物配置
     SCREENSHOT_ON_FAILURE: bool = os.getenv("SCREENSHOT_ON_FAILURE", "true").lower() == "true"
     VIDEO_ON_FAILURE: bool = os.getenv("VIDEO_ON_FAILURE", "false").lower() == "true"
@@ -28,5 +33,6 @@ class Config:
             f"平台={cls.PLATFORM} | "
             f"浏览器={cls.BROWSER} | "
             f"无头模式={cls.HEADLESS} | "
+            f"全屏={cls.FULLSCREEN} | "
             f"基础URL={cls.BASE_URL}"
         )

@@ -102,6 +102,9 @@ pytest --collect-only -q
 pytest -v -s
 ```
 
+运行日志写入 `reports/logs/test_run.log`；失败截图写入 `reports/screenshots/`；
+需要 Playwright trace 时设置 `PW_TRACE=1`，文件写入 `artifacts/traces/`。
+
 ### 3. 类级浏览器 / 页面复用
 
 - **测试类级浏览器**：每个测试类只启动一次 Chromium；同一测试类共用一个 `browser context` 和 `page`。
@@ -116,9 +119,26 @@ pytest -v -s
 ### 4. 调试
 
 ```bash
-# 显示浏览器窗口并放慢操作
-PW_HEADLESS=false PW_SLOW_MO=500 pytest testcases/test_login.py -v -s
+# 显示浏览器窗口并放慢操作；默认 1920x1080 全屏视口
+$env:HEADLESS="false"
+$env:SLOW_MO="500"
+$env:FULLSCREEN="true"
+$env:VIEWPORT_WIDTH="1920"
+$env:VIEWPORT_HEIGHT="1080"
+pytest testcases/test_login.py -v -s
 ```
+
+### 5. 日志
+
+- 用例开始：`activating test_purchase_001_insert_row`
+- 页面动作：`activating 打开采购列表`、`activating 点击新增`、`activating 插入行`
+- 断言成功：`ASSERT PASSED | test_purchase_001_insert_row:29 | page.get_editable_row_count() == 1`
+- 断言失败：`ASSERT FAILED | ...`
+- 用例结果：`PASSED` / `FAILED`
+- 文件：`reports/logs/test_run.log`
+
+逐条断言日志由 `pytest.ini` 的 `enable_assertion_pass_hook = true` 开启；
+修改测试代码后如果看不到 `ASSERT PASSED`，清除 `testcases/__pycache__` 再运行。
 
 ## RAG 知识库
 

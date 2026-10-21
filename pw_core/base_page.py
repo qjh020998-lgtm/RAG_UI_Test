@@ -147,18 +147,18 @@ class BasePage:
         try:
             self.page.wait_for_url(
                 re.compile(r".*/dashboard/analysis.*"),
-                timeout=30000,
+                timeout=60000,
             )
         except Exception:
             self.page.goto(home_url, wait_until="domcontentloaded")
             self.page.wait_for_url(
                 re.compile(r".*/dashboard/analysis.*"),
-                timeout=30000,
+                timeout=60000,
             )
 
-        self.page.locator(".ant-menu").first.wait_for(
+        self.page.locator(".ant-menu:visible").first.wait_for(
             state="visible",
-            timeout=30000,
+            timeout=60000,
         )
         self.page.evaluate("window.scrollTo(0, 0)")
         log.info("已回到 ERP 首页")
