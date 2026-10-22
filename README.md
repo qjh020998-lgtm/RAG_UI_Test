@@ -43,9 +43,9 @@ RAG_UI_Test/
 │       └── web_driver.py
 ├── tools/view_milvus_data.py  # Milvus 数据浏览与检索演示
 ├── page/                   # Page Object 层
-│   ├── base_page.py        # 兼容 shim，转发到 pw_core.base_page
 │   ├── login_page.py       # 登录页
-│   └── purchase_page.py    # 采购管理列表页/新增弹窗
+│   ├── purchase_page.py    # 采购管理列表页/新增弹窗
+│   └── retail_page.py      # 零售管理列表页/新增弹窗
 ├── data/                   # 只放 YAML 测试数据
 │   ├── config.yaml         # base_url 等配置
 │   └── login_cases.yaml    # 登录测试数据
