@@ -1,9 +1,9 @@
 """采购管理页面 UI 用例。
 
-流程来源：docs/cases/ERP系统测试用例 (1).xlsx / 采购页
+流程来源：docs/cases/ERP系统测试用例.xlsx / 采购页
 001-039 每条一个 pytest 用例；027/029/030/039 明确 skip。
-006-007 为数量异常的特征化用例；008/009 为库存上限缺陷用例，
-按业务预期断言，系统未提示时应失败并暴露 Bug。
+006/007 为数量异常边界用例，008/009 为库存上限缺陷用例，
+均按业务预期断言，系统未实现时应失败并暴露 Bug。
 """
 
 import allure
@@ -100,18 +100,44 @@ class TestPurchase:
         assert page.get_status(requisition_no) == "未审核", f"采购-005 {requisition_no} 状态不是未审核"
 
     @allure.story("采购-006 数量为 0")
-    @allure.description("缺陷：用例预期数量 0 被拦截并提示“数量应>=1”，当前系统未实现，按实际行为标记通过。")
+    @allure.description("缺陷：数量 0 应被拦截并提示“数量应>=1”；当前系统未校验，按业务预期断言应失败。")
     @pytest.mark.regression
     @pytest.mark.web
     def test_purchase_006_quantity_zero(self, purchase_apply_page: PurchasePage) -> None:
-        self._save_quantity_and_expect_saved(purchase_apply_page, "0")
+        page = purchase_apply_page
+        page.open_add_modal()
+        page.open_product_selector(0)
+        page.choose_product("西瓜2号", mode="dblclick")
+        page.fill_editable_quantity("0")
+        page.click_save_only()
+        page.page.wait_for_timeout(800)
+        assert page.page.locator(".ant-modal:visible").count() > 0, (
+            "采购-006 Bug：数量 0 保存成功，弹窗关闭"
+        )
+        messages = " ".join(page.get_messages())
+        assert "数量" in messages and any(token in messages for token in (">=1", "≥1")), (
+            f"采购-006 数量 0 未提示“数量应>=1”，实际：{messages}"
+        )
 
     @allure.story("采购-007 数量为负数")
-    @allure.description("缺陷：用例预期负数被拦截并提示“数量应>=2”，当前系统未实现，按实际行为标记通过。")
+    @allure.description("缺陷：负数数量应被拦截并提示数量下限；当前系统未校验，按业务预期断言应失败。")
     @pytest.mark.regression
     @pytest.mark.web
     def test_purchase_007_quantity_negative(self, purchase_apply_page: PurchasePage) -> None:
-        self._save_quantity_and_expect_saved(purchase_apply_page, "-1")
+        page = purchase_apply_page
+        page.open_add_modal()
+        page.open_product_selector(0)
+        page.choose_product("西瓜2号", mode="dblclick")
+        page.fill_editable_quantity("-1")
+        page.click_save_only()
+        page.page.wait_for_timeout(800)
+        assert page.page.locator(".ant-modal:visible").count() > 0, (
+            "采购-007 Bug：数量 -1 保存成功，弹窗关闭"
+        )
+        messages = " ".join(page.get_messages())
+        assert "数量" in messages and any(
+            token in messages for token in (">=1", "≥1", ">=2", "≥2")
+        ), f"采购-007 负数数量未提示数量下限，实际：{messages}"
 
     @allure.story("采购-008 数量达到当前库存上限")
     @allure.description(
@@ -422,8 +448,8 @@ class TestPurchase:
 
     @allure.story("采购-023 部分转采购入库")
     @allure.description(
-        "用例预期订单状态为“部分采购”；当前 ERP 列表实际显示“不可采购”，"
-        "按实际 UI 标签做特征化断言，并在工作簿中标注差异。"
+        "缺陷：用例预期订单状态为“部分采购”；当前 ERP 列表实际显示“不可采购”，"
+        "按业务预期断言应失败。"
     )
     @pytest.mark.e2e
     @pytest.mark.web
@@ -443,8 +469,8 @@ class TestPurchase:
         page.page.wait_for_timeout(1000)
         page.open_purchase_order()
         status = page.get_status(deposit_purchase_order_no)
-        assert status in {"部分采购", "不可采购"}, (
-            f"采购-023 {deposit_purchase_order_no} 状态为 {status}，预期部分采购/不可采购"
+        assert status == "部分采购", (
+            f"采购-023 {deposit_purchase_order_no} 状态为 {status}，预期“部分采购”"
         )
 
     @allure.story("采购-024 新增采购入库并保存")
@@ -801,18 +827,6 @@ class TestPurchase:
     @pytest.mark.skip(reason="采购-039 工作簿标注跳过：附件多文件上传/导出未纳入自动化")
     def test_purchase_039_attachment_export(self) -> None:
         pass
-
-    def _save_quantity_and_expect_saved(self, page: PurchasePage, value: str) -> None:
-        """006-007 当前系统行为：数量不校验，保存后弹窗关闭。"""
-        page.open_add_modal()
-        page.open_product_selector(0)
-        page.choose_product("西瓜2号", mode="dblclick")
-        page.fill_editable_quantity(value)
-        page.click_save_only()
-        page.page.wait_for_timeout(800)
-        assert page.page.locator(".ant-modal:visible").count() == 0, (
-            f"采购-006/007 数量 {value} 保存后弹窗未关闭"
-        )
 
     def _read_number_pair(self, page: PurchasePage, opener) -> tuple[str, str]:
         opener()

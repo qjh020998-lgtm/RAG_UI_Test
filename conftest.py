@@ -14,6 +14,8 @@ from pw_core.driver.browser_session import BrowserSession
 from pw_core.driver.context_driver import ContextDriver
 from pw_core.driver.driver_manager import DriverManager
 from utils.logger import get_logger
+from dotenv import load_dotenv
+load_dotenv()
 
 log = get_logger(__name__)
 

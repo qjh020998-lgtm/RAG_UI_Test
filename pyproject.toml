@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.16.0",
     "pytest>=9.1.1",
     "pyyaml>=6.0.1",
+    "openpyxl>=3.1.0",
     "PyMuPDF>=1.24.0",
     "rapidocr-onnxruntime==1.4.4",
     "flagembedding>=1.4.2",
@@ -23,6 +24,8 @@ dependencies = [
     # API driver for optional test-data setup
     "httpx>=0.28.0",
     "allure-pytest>=2.16.2",
+    "pytest-playwright>=0.10.0",
+    "chroma>=0.2.0",
 ]
 
 [[index]]

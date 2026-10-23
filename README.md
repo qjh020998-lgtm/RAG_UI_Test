@@ -61,7 +61,7 @@ RAG_UI_Test/
 ├── plan/                   # 项目计划与阶段总结
 ├── docker-compose.yml      # Milvus 部署
 ├── volumes/                # Milvus/etcd/MinIO 数据（git 忽略）
-├── .env.example            # RAG_ 环境变量样例
+├── .env                    # 环境配置（含密钥，git 忽略）
 ├── artifacts/              # 运行时截图/trace（自动生成，已忽略）
 ├── AGENTS.md               # 给 AI 助手的项目说明
 └── main.py                 # 入口示例
@@ -145,8 +145,7 @@ pytest testcases/test_login.py -v -s
 ### 1. 准备环境
 
 ```bash
-# 复制环境变量样例并填写（.env 已被 git 忽略）
-copy .env.example .env
+# 编辑根目录 .env（已存在，含密钥，已被 git 忽略）
 
 # 启动 Milvus（etcd + MinIO + milvus-standalone，首次会拉镜像）
 docker compose up -d
@@ -261,7 +260,7 @@ class TestLogin:
 - `data/config.yaml`：`base_url`
 - 环境变量（前缀 `PW_`）：`PW_BROWSER_TYPE`、`PW_HEADLESS`、`PW_SLOW_MO`、
   `PW_TRACE_ENABLED`、`PW_VIEWPORT_WIDTH` 等，详见 `pw_core/conf.py`
-- 环境变量（前缀 `RAG_`）：写在 `.env`（从 `.env.example` 复制），分四组，详见 `agent/config.py`
+- 环境变量（前缀 `RAG_`）：写在根目录 `.env`，分四组，详见 `agent/config.py`
   - `RAG_MILVUS_*`：`URI`、`COLLECTION_NAME`、`COLLECTION_ALIAS`、`TIMEOUT`
   - `RAG_EMBEDDING_*`：`MODEL_PATH`、`DEVICE`、`USE_FP16`、`BATCH_SIZE`、`DENSE_DIM`、`MAX_LENGTH`
   - `RAG_LLM_*`：`API_KEY`、`BASE_URL`、`FAST_MODEL`、`STRONG_MODEL`、`TEMPERATURE`、`MAX_TOKENS`

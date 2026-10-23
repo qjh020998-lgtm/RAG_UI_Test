@@ -86,7 +86,7 @@ RAG_UI_Test/
 ├── docker-compose.yml      # ✅ Milvus 部署（唯一权威：v2.5.14，数据落 ./volumes/）
 ├── docker/README.md        # ✅ Docker 说明（旧 milvus compose 已删除，根目录为唯一权威）
 ├── volumes/                # Milvus/etcd/MinIO 数据目录（git 忽略）
-├── .env.example            # RAG_ 环境变量样例（复制为 .env 后填写；.env 不入库）
+├── .env                    # 环境配置（含密钥，git 忽略；Milvus / BGE-M3 / LLM / 检索参数）
 ├── artifacts/              # 运行时产物：截图/trace/下载（git 忽略，自动创建）
 ├── cache/                  # 文档处理产物（chunks.json、ocr_cache.json，git 忽略）
 ├── knowledge-store/        # 知识库产物（images/、导出/评测/备份；git 忽略）
@@ -172,7 +172,7 @@ class TestLogin:
 - **检索策略**：dense + sparse 双路召回 + RRFRanker(k=60) 融合，支持 metadata 过滤（module、chunk_type）。
 - **数据摄入**：从 `cache/chunks.json` 读取已切片数据，按 chunk_type 分类构造 embedding_text 后批量嵌入写入 Milvus。
 - **配置前缀**：`RAG_`（如 `RAG_MILVUS_URI`、`RAG_MILVUS_COLLECTION_NAME`、`RAG_EMBEDDING_MODEL_PATH`、`RAG_SEARCH_TOP_K`）。
-  环境变量样例见 `.env.example`，复制为 `.env` 后填写；`.env` 已 git 忽略。
+  环境变量统一写在根目录 `.env`（含密钥，已 git 忽略）。
 - 不要把 chunks 数据或嵌入结果放到 `data/` 目录；中间产物放 `cache/`，知识库产出放 `knowledge-store/`。
 - **唯一数据源**：全量切分产物只能由 `python -m agent.load_documents` 生成到 `cache/chunks.json`。
   **禁止**把 `cache/_all_chunks.json` 当摄入源——它是 `testself/test_all_documents.py` 的副产物，
@@ -244,7 +244,7 @@ python -c "from agent.schema import drop_collection; from agent.embedding import
 python -c "from agent.embedding import hybrid_search; [print(r.summary()) for r in hybrid_search('采购入库的操作流程', filters={'module':'采购管理'})]"
 
 # 环境准备
-copy .env.example .env            # 然后填写 RAG_LLM_API_KEY 等
+# 编辑根目录 .env，填写 RAG_LLM_API_KEY / RAG_MILVUS_URI 等
 ```
 
 ## 6. 数据文件格式
