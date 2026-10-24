@@ -1,4 +1,0 @@
-# 框架运行配置
-# 其余 Playwright 参数可用 PW_ 前缀的环境变量覆盖，例如 PW_HEADLESS=false
-
-base_url: "http://39.101.122.147:3000"
