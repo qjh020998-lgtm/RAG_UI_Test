@@ -26,6 +26,7 @@ dependencies = [
     "allure-pytest>=2.16.2",
     "pytest-playwright>=0.10.0",
     "chroma>=0.2.0",
+    "langchain-openai>=1.7.2",
 ]
 
 [[index]]

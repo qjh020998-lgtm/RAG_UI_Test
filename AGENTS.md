@@ -21,45 +21,55 @@
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | Phase 1 | 基础设施层（pw_core、page、data、testcases） | ✅ 已完成 |
-| Phase 2 | RAG 知识库（文档切分 + OCR + BGE-M3 + Milvus 混合检索） | ✅ 主链路已跑通（库内 235 条，检索实测通过） |
+| Phase 2 | RAG 知识库（文档切分 + OCR + BGE-M3 + Milvus 混合检索） | ✅ 主链路已跑通（三层 collection 共 508 条，检索实测通过） |
 | Phase 2.5 | RAG 数据质量与工程加固（见 `plan/phase2_alignment_2026-10-19.md`） | ✅ 已完成：位置型主键、幂等 ingest、OCR 修复、dense 门控、manifest |
-| Phase 3 | AIGC 测试用例生成（选型见 `plan/think or choice/aigc_code_generation_strategy.md`） | 🚧 Phase 3.0 基础设施已完成（pw_core/BasePage/Driver/契约测试），3.1+ 待做 |
+| Phase 3 | AIGC 测试用例生成（选型见 `plan/think or choice/aigc_code_generation_strategy.md`） | 🚧 三层索引 + indexer/retriever/chunking 已完成（code 198 / test 75 / knowledge 235），3.1+ 待做 |
 | Phase 4 | 控件定位自愈 | ⏳ 未开始 |
 | Phase 5 | 监控与报告 | ⏳ 未开始 |
 
-**实测状态（2026-10-19，Phase 2.5 重建后）**：collection `erp_knowledge` 有
-**235 条**实体（text 103 / image 102 / table 30），主键为位置型
-`{doc_slug}_{txt|img|tbl}_pXXX_iXXXX`，`content_hash` 为普通字段；dense 索引
-`IVF_FLAT+COSINE(nlist=128)`、sparse 索引 `SPARSE_INVERTED_INDEX+IP`。
+**实测状态（2026-10-23）**：Milvus 内已建 **三个 collection**，共用同一套 24 字段 schema
+（见 `agent/milvus_schema.py`），按层隔离检索：
+
+| Collection | 层 | 实体数 | 数据来源 |
+|---|---|---|---|
+| `erp_code` | code | 198 | Page Object / `pw_core/` 基类 / 组件（AST 解析 → 方法级切分） |
+| `erp_test` | test | 75 | `testcases/` 已有测试用例（含陈旧度标记） |
+| `erp_knowledge` | knowledge | 235 | `docs/` 业务文档 MD/PDF（text 103 / image 102 / table 30） |
+
+主键为位置型 `{doc_slug}_{txt|img|tbl}_pXXX_iXXXX`（knowledge 层）/
+`{file_slug}_{chunk_type}_pXXX`（code/test 层），`content_hash` 为普通字段；
+dense 索引 `IVF_FLAT+COSINE(nlist=128)`、sparse 索引 `SPARSE_INVERTED_INDEX+IP`。
 稳态单查询 **245~294ms**（进程级 BGE-M3 单例），无关查询 dense 门控后返回空。
 `knowledge-store/manifests/` 记录每次 ingest；`doc_version` 分区与 alias **尚未实现**。
 
-> `agent/` 下仍有 6 个**空占位**文件（0 字节）：`app.py`、`cache.py`、`models.py`、
-> `monitering.py`、`rag_pipline.py`、`security.py`，是 Phase 2.5-5 的骨架，
-> 属于「未完成的项目架构」，不要因为文件为空就删除它们。
-> 已实现的是：`config.py`、`schema.py`、`embedding.py`、`load_documents.py`。
-> 注意原 `model.py` 已重命名为 `models.py`（仍为空）。
+> `agent/` 下 `retriver.py`（拼写错误，0 字节）是历史残留，不要删除。
+> 已实现的模块：`config.py`、`embedding.py`、`chunking.py`、`indexer.py`、
+> `milvus_connect.py`、`milvus_schema.py`、`retriever.py`、`models.py`、
+> `parser/`（Excel 解析与校验）。
 
 ## 3. 目录结构与职责
 
 ```
 RAG_UI_Test/
-├── agent/                  # AI Agent 层（RAG 部分已实现，其余为 Phase 3-5 占位）
+├── agent/                  # AI Agent 层（三层 RAG 已实现）
 │   ├── config.py           # ✅ RAG 配置（RAG_ 前缀，Milvus/Embedding/LLM/Search）
-│   ├── schema.py           # ✅ Milvus collection schema + ChunkRecord + 索引管理
-│   ├── embedding.py        # ✅ BGE-M3 封装 + build_embedding_text + ingest + hybrid_search
-│   ├── load_documents.py   # ✅ 文档加载/切分统一入口（python -m agent.load_documents）
-│   ├── app.py              # ⏳ 空占位：Agent 应用入口
-│   ├── models.py           # ⏳ 空占位：LLM 模型管理（原 model.py 已改名）
-│   ├── rag_pipline.py      # ⏳ 空占位：RAG 流水线（Phase 3 落地 RAGPipeline）
-│   ├── cache.py            # ⏳ 空占位：缓存层
-│   ├── security.py         # ⏳ 空占位：安全相关
-│   └── monitering.py       # ⏳ 空占位：监控
-├── tools/document/         # ✅ 文档处理层（Phase 2 新增，不写业务）
-│   ├── schema.py           # DocumentChunk / ChunkMetadata / ImageMetadata / generate_chunk_id
-│   ├── md_filtter.py       # Markdown 解析切分（按 H2/H3）
-│   ├── pdf_filtter.py      # PDF 解析切分（按 ToC 小节）+ 图片提取 + RapidOCR + OCR 缓存
-│   └── __init__.py         # DocumentProcessor 统一入口
+│   ├── milvus_schema.py    # ✅ 三层 collection 统一 schema（24 字段）
+│   ├── milvus_connect.py   # ✅ Milvus 连接/读写/collection 生命周期
+│   ├── embedding.py        # ✅ BGE-M3 封装（dense + sparse，进程级单例）
+│   ├── chunking.py         # ✅ 三层切分：CodeChunk / TestChunk / KnowledgeChunk
+│   ├── indexer.py          # ✅ 索引构建：chunk → embed → Milvus（python -m agent.indexer）
+│   ├── retriever.py        # ✅ 资料收集器：三路检索 + 矛盾检测 + prompt 格式化
+│   ├── models.py           # ✅ ERP 测试用例领域模型
+│   ├── parser/             # ✅ Excel 解析与校验（extractor/validator/reader/writer）
+│   └── retriver.py         # ⚠ 拼写错误的空文件，历史残留
+├── tools/
+│   ├── ast_parser.py       # ✅ AST 解析：Python 源码 → 结构化数据（供 chunking.py 切分）
+│   ├── view_milvus_data.py # ✅ Milvus 数据浏览/检索演示工具
+│   └── document/           # ✅ 文档处理层（Phase 2，不写业务）
+│       ├── schema.py       # DocumentChunk / ChunkMetadata / ImageMetadata / generate_chunk_id
+│       ├── md_filtter.py   # Markdown 解析切分（按 H2/H3）
+│       ├── pdf_filtter.py  # PDF 解析切分（按 ToC 小节）+ 图片提取 + RapidOCR + OCR 缓存
+│       └── __init__.py     # DocumentProcessor 统一入口
 ├── pw_core/                # ✅ Playwright 核心包（不写业务）
 │   ├── conf.py             # 配置（PW_ 前缀；ApiConfig 用 PW_API_）
 │   ├── base_page.py        # 页面基类：定位/动作/等待/断言/弹窗/表格
@@ -69,7 +79,6 @@ RAG_UI_Test/
 │       ├── driver_manager.py  # 管理器：API vs Web 策略
 │       ├── web_driver.py      # Playwright 浏览器/context/page 生命周期
 │       └── api_client.py      # 可选 ERP API 客户端（httpx）
-├── tools/view_milvus_data.py  # ✅ Milvus 数据浏览/检索演示工具
 ├── page/                   # Page Object 层（一个页面一个类）
 │   ├── login_page.py       # 登录页
 │   ├── purchase_page.py    # 采购管理列表页/新增弹窗
@@ -168,13 +177,18 @@ class TestLogin:
 ### 4.5 RAG 层
 
 - **嵌入模型**：BGE-M3（路径 `D:\huggingface_cache\modelscope\models\BAAI--bge-m3\snapshots\master`），使用 FlagEmbedding SDK。
-- **向量库**：Milvus standalone（Docker Compose，`localhost:19530`），collection 名 `erp_knowledge`。
-- **检索策略**：dense + sparse 双路召回 + RRFRanker(k=60) 融合，支持 metadata 过滤（module、chunk_type）。
-- **数据摄入**：从 `cache/chunks.json` 读取已切片数据，按 chunk_type 分类构造 embedding_text 后批量嵌入写入 Milvus。
+- **向量库**：Milvus standalone（Docker Compose，`localhost:19530`），三个 collection：
+  `erp_code`（Page Object/基类）、`erp_test`（已有测试）、`erp_knowledge`（业务文档）。
+  三层共用同一套 24 字段 schema（`agent/milvus_schema.py`），配置前缀 `RAG_MILVUS_*_COLLECTION`。
+- **检索策略**：dense + sparse 双路召回 + RRFRanker(k=60) 融合，支持 metadata 过滤（module、chunk_type、layer）。
+- **数据摄入**：`python -m agent.indexer` 统一入口，按层切分（`agent/chunking.py`）→ 编码 → 写入 Milvus。
+  knowledge 层仍从 `cache/chunks.json` 读取；code/test 层由 AST 解析 + 测试文件扫描生成。
 - **配置前缀**：`RAG_`（如 `RAG_MILVUS_URI`、`RAG_MILVUS_COLLECTION_NAME`、`RAG_EMBEDDING_MODEL_PATH`、`RAG_SEARCH_TOP_K`）。
   环境变量统一写在根目录 `.env`（含密钥，已 git 忽略）。
 - 不要把 chunks 数据或嵌入结果放到 `data/` 目录；中间产物放 `cache/`，知识库产出放 `knowledge-store/`。
-- **唯一数据源**：全量切分产物只能由 `python -m agent.load_documents` 生成到 `cache/chunks.json`。
+- **唯一数据源**：knowledge 层全量切分产物只能由 `python -m agent.load_documents`（或
+  `python -m agent.indexer --layers knowledge`）生成到 `cache/chunks.json`。
+  code/test 层由 `python -m agent.indexer --layers code test` 从源码直接切分。
   **禁止**把 `cache/_all_chunks.json` 当摄入源——它是 `testself/test_all_documents.py` 的副产物，
   图片落在 pytest `tmp_path`，且历史上出现过 48 条 OCR 失败与 3 组主键重复
   （见 `plan/phase2_alignment_2026-10-19.md` P0-1）。
@@ -219,7 +233,14 @@ docker compose up -d              # 启动 Milvus（etcd + MinIO + milvus-standa
 docker compose down               # 停止 Milvus
 docker compose ps                 # 查看健康状态（三个容器都应为 healthy）
 
-# 文档切分（全量导出唯一入口，默认输出 cache/chunks.json）
+# 三层索引构建（统一入口）
+python -m agent.indexer                          # 全量：code + test + knowledge
+python -m agent.indexer --layers knowledge        # 只重建 knowledge 层
+python -m agent.indexer --layers code test        # 只重建 code + test 层
+python -m agent.indexer --stats                   # 查看各 collection 行数
+python -m agent.indexer --layers knowledge --rebuild  # drop + 重建（旧 schema 迁移）
+
+# 文档切分（knowledge 层数据源，默认输出 cache/chunks.json）
 python -m agent.load_documents
 python -m agent.load_documents --docs-dir docs --output cache/chunks.json
 
@@ -235,13 +256,8 @@ pytest testself/test_md_processor.py -v
 pytest testself/test_pdf_processor.py -v -s          # 含 OCR，首次很慢
 pytest testself/test_embedding_retrieval.py -v -s    # 需 Milvus 已启动，且会加载 BGE-M3
 
-# RAG 数据摄入 / 校验（RAGPipeline CLI 尚未实现，当前用底层 API）
-python -c "from agent.embedding import ingest; ingest('cache/chunks.json', validate_only=True)"
-python -c "from agent.embedding import ingest; print(ingest('cache/chunks.json'))"
-# 需要物理行数也回到 235 时：
-python -c "from agent.schema import drop_collection; from agent.embedding import ingest; drop_collection(); ingest('cache/chunks.json')"
-# 检索：
-python -c "from agent.embedding import hybrid_search; [print(r.summary()) for r in hybrid_search('采购入库的操作流程', filters={'module':'采购管理'})]"
+# RAG 检索（retriever 三路收集）
+python -c "from agent.retriever import Retriever; r = Retriever(); result = r.retrieve('采购入库的操作流程', affected_pages=['purchase_page']); print(result.context_for_prompt())"
 
 # 环境准备
 # 编辑根目录 .env，填写 RAG_LLM_API_KEY / RAG_MILVUS_URI 等
@@ -271,14 +287,14 @@ base_url: "http://39.101.122.147:3000"
 1. **定位策略**：Accessibility Tree 优先于 DOM，抗前端重构、语义化、Playwright 原生支持。
 2. **LLM 策略**：Qwen 3.8 双模型——`qwen3.8-flash` 处理常规任务，`qwen3.8-max` 负责代码生成与自愈。
 3. **嵌入模型**：本地 BGE-M3，路径 `D:\huggingface_cache\modelscope\models\BAAI--bge-m3\snapshots\master`。
-4. **向量库**：**Milvus 单机版（Docker Compose：etcd + MinIO + milvus-standalone，19530/9091）**，dense + sparse 双路召回、RRFRanker 融合；按 `doc_version` 分区 + collection alias 切换（**此项尚未实现**），方案见 `plan/think or choice/rag_retrieval_design.md`。
+4. **向量库**：**Milvus 单机版（Docker Compose：etcd + MinIO + milvus-standalone，19530/9091）**，三层 collection（`erp_code` / `erp_test` / `erp_knowledge`）共用统一 schema，dense + sparse 双路召回、RRFRanker 融合；按 `doc_version` 分区 + collection alias 切换（**此项尚未实现**），方案见 `plan/think or choice/rag_retrieval_design.md`。
 5. **AIGC 采用混合架构**（非纯 Agentic）：RAG 检索 + 测试规划 → 自动收集 Page 类签名 → LLM 按模板生成 → AST 校验后写入 `testcases/`。理由：兼顾精度、延迟与 token 成本。
 6. **AIGC 中间层用 YAML Spec，不用 Excel**：Spec 是真源（可 Pydantic 校验、可 git diff），
    Excel 只作为给业务评审的导出视图。LLM 不直接写 `testcases/*.py`，代码由 Jinja2 模板渲染。
    见 `plan/think or choice/aigc_code_generation_strategy.md`。
 7. **Playwright MCP 限定为「生成期探测 + 验证期 dry-run」**，不取代 `pw_core/`，
    测试运行期仍走自有封装（保留 trace/截图/artifacts 能力）。同上文档 §4。
-8. **父子分层检索不做**：235 chunks、最大分组仅 6 个、层级仅 3 层，
+8. **父子分层检索不做**：knowledge 层 235 chunks、最大分组仅 6 个、层级仅 3 层，
    用 metadata 过滤 + `chunk_index` 邻居召回即可等效。见 `plan/think or choice/parent_child_analysis.md`。
 
 ## 8. 修改时的注意事项
@@ -292,9 +308,10 @@ base_url: "http://39.101.122.147:3000"
   以及 `plan/phase2_alignment_2026-10-19.md` 的缺陷清单状态。
 - 不要新增第二份 docker-compose；根目录那份是唯一权威。
 - 不要让 `testself/` 的用例写生产数据目录（`cache/`、`knowledge-store/`）。
-- `ingest()` 已是幂等的「先按 `source_doc` 删除 → 再 upsert」，并带脏数据守卫；
+- `agent.indexer` 已是幂等的「先按 `layer` 删除 → 再 insert」，并带脏数据守卫；
   但 Milvus `delete` 是 tombstone，重复 ingest 后 `num_entities` 会暂时偏大，
-  验收看 `count(*)`。需要物理行数也回到 235 时，用 drop + 单次重建。
+  验收看 `count(*)`。需要物理行数精确时，用 `--rebuild`（drop + 单次重建）。
+- 三层 collection 当前数据量：`erp_code` 198 / `erp_test` 75 / `erp_knowledge` 235。
 
 ## 9. 参考文档
 

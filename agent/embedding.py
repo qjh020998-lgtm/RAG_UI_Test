@@ -63,9 +63,9 @@ class EmbeddingUnavailableError(RuntimeError):
         super().__init__(
             f"{message}\n"
             f"请确认：\n"
-            f"  1) .env 的 RAG_EMBEDDING_MODEL_PATH 指向 BGE-M3 快照目录\n"
+            f"  1) .env 的 RAG_EMBEDDING_MODEL_PATH 指向模型快照目录\n"
             f"  2) 已安装 flagembedding\n"
-            f"  3) 磁盘/内存足够（模型约 2.27GB）\n"
+            f"  3) 磁盘/内存足够（BGE-M3 约 2.27GB，bge-small 约 100MB）\n"
             f"原始错误：{cause!r}"
         )
 
@@ -110,6 +110,7 @@ class BgeM3Embedder:
     def __init__(self, settings: EmbeddingSettings | None = None):
         self.settings = settings or EmbeddingSettings.from_env()
         self._model = None
+        self._sparse_capable = True
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -128,21 +129,31 @@ class BgeM3Embedder:
     def _load_model(self):
         path = self.settings.model_dir
         if not path.exists():
-            raise EmbeddingUnavailableError(f"BGE-M3 模型目录不存在：{path}")
+            raise EmbeddingUnavailableError(f"嵌入模型目录不存在：{path}")
 
         try:
-            from FlagEmbedding import BGEM3FlagModel
+            from FlagEmbedding import BGEM3FlagModel, FlagModel
         except ImportError as exc:  # pragma: no cover - 取决于环境
             raise EmbeddingUnavailableError("未安装 FlagEmbedding", exc) from exc
 
         kwargs = {"use_fp16": self.settings.use_fp16}
+        # BGE-M3 用 BGEM3FlagModel（dense + sparse）；普通 BGE 用 FlagModel（仅 dense）
+        is_m3 = "bge-m3" in path.name.lower() or (path / "colbert_linear.pt").exists()
+        model_cls = BGEM3FlagModel if is_m3 else FlagModel
         # FlagEmbedding 1.3+ 用 devices，旧版用 device
         try:
-            model = BGEM3FlagModel(str(path), devices=self.settings.device, **kwargs)
+            model = model_cls(str(path), devices=self.settings.device, **kwargs)
         except TypeError:
-            model = BGEM3FlagModel(str(path), device=self.settings.device, **kwargs)
+            model = model_cls(str(path), device=self.settings.device, **kwargs)
 
-        log.info("BGE-M3 已加载：%s（device=%s）", path, self.settings.device)
+        self._sparse_capable = is_m3
+        log.info(
+            "%s 已加载：%s（device=%s，sparse=%s）",
+            "BGE-M3" if is_m3 else "BGE",
+            path,
+            self.settings.device,
+            "on" if is_m3 else "off",
+        )
         return model
 
     def is_available(self) -> bool:
@@ -176,21 +187,28 @@ class BgeM3Embedder:
 
         # 空文本会让 tokenizer 报错，用单空格占位；保证输出与输入一一对应
         prepared = [text if text and text.strip() else " " for text in texts]
+        batch = batch_size or self.settings.batch_size
+        length = max_length or self.settings.max_length
+        model = self.model  # 触发加载，确定是否支持 sparse
 
-        output = self.model.encode(
-            prepared,
-            batch_size=batch_size or self.settings.batch_size,
-            max_length=max_length or self.settings.max_length,
-            return_dense=True,
-            return_sparse=True,
-            return_colbert_vecs=False,
-        )
+        if self._sparse_capable:
+            output = model.encode(
+                prepared,
+                batch_size=batch,
+                max_length=length,
+                return_dense=True,
+                return_sparse=True,
+                return_colbert_vecs=False,
+            )
+            dense = output["dense_vecs"]
+            sparse = [_to_sparse_dict(weights) for weights in output["lexical_weights"]]
+        else:
+            # bge-small 这类模型只输出 dense，sparse 用占位值满足 Milvus 字段约束
+            dense = model.encode(prepared, batch_size=batch, max_length=length)
+            sparse = [_placeholder_sparse() for _ in prepared]
 
-        dense = output["dense_vecs"]
         if hasattr(dense, "tolist"):
             dense = dense.tolist()
-
-        sparse = [_to_sparse_dict(weights) for weights in output["lexical_weights"]]
         return list(dense), sparse
 
     def encode_query(self, text: str) -> tuple[DenseVector, SparseVector]:
@@ -215,6 +233,14 @@ def _to_sparse_dict(weights: dict) -> SparseVector:
         if weight > 0:
             result[token_id] = weight
     return result
+
+
+def _placeholder_sparse() -> SparseVector:
+    """dense-only 模型没有 sparse；给 Milvus 一个非空占位值。
+
+    Milvus 的 SPARSE 字段不接受空 dict。检索只走 dense，占位值不参与打分。
+    """
+    return {0: 1e-6}
 
 
 # ---------------------------------------------------------------------------
