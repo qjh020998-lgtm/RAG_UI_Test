@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
-from data_loader import load_config, load_login_cases
+from data_loader import load_config, load_login_cases, load_yaml
 from page.login_page import LoginPage
 from page.purchase_page import PurchasePage
 from page.retail_page import RetailPage
@@ -101,6 +101,16 @@ def _ensure_home(page: Page, auth_config: dict) -> None:
     page.goto(home_url, wait_until="domcontentloaded")
     try:
         page.wait_for_url(HOME_URL_RE, timeout=15000)
+    except Exception:
+        pass
+
+    if _is_home(page):
+        return
+
+    # SPA 路由守卫可能把 URL 改回上次页面，强制 reload 一次
+    try:
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
     except Exception:
         pass
 
@@ -293,16 +303,28 @@ def login_page(pw_page) -> LoginPage:
 
 
 @pytest.fixture()
-def logged_in_page(home_guard, pw_page: Page) -> Page:
+def logged_in_page(home_guard, pw_page: Page, auth_config: dict) -> Page:
     """已登录用例直接复用类级 page；home_guard 已确保首页。"""
-    expect(pw_page).to_have_url(HOME_URL_RE, timeout=10000)
+    if "/dashboard/analysis" not in pw_page.url:
+        pw_page.goto(
+            f"{auth_config['base_url']}/dashboard/analysis",
+            wait_until="domcontentloaded",
+        )
+        pw_page.wait_for_timeout(1500)
     return pw_page
 
 
 # -- 跨模块流程数据：单证号、单据状态等 --
 @pytest.fixture(scope="class")
 def flow_data() -> dict:
+    """兼容旧用例；新用例请使用 requisition / purchase_order / inbound_bill 等 fixture。"""
     return {}
+
+
+# -- 测试数据锚点：只提供稳定值，单据由用例自己造、类级统一清理 --
+@pytest.fixture(scope="session")
+def purchase_data() -> dict:
+    return load_yaml("purchase.yaml")
 
 
 # -- 类级清理：page fixture 只登记，类结束时统一清理 --

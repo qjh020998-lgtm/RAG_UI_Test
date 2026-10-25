@@ -9,7 +9,10 @@
 import allure
 import pytest
 
+from data_loader import load_yaml
 from page.purchase_page import PurchasePage
+
+PURCHASE_DATA = load_yaml("purchase.yaml")
 
 
 @allure.feature("采购管理")
@@ -84,7 +87,6 @@ class TestPurchase:
     def test_purchase_005_save_valid_quantity(
         self,
         purchase_apply_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_apply_page
         page.open_add_modal()
@@ -96,7 +98,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["requisition_no"] = requisition_no
         assert page.get_status(requisition_no) == "未审核", f"采购-005 {requisition_no} 状态不是未审核"
 
     @allure.story("采购-006 数量为 0")
@@ -205,10 +206,9 @@ class TestPurchase:
     def test_purchase_010_audit_apply(
         self,
         purchase_apply_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_apply_page
-        requisition_no = flow_data.get("requisition_no")
+        requisition_no = page.create_requisition(PURCHASE_DATA["product"], 1)
         assert requisition_no, "采购-010 缺少 005 创建的请购单"
         page.open_purchase_apply()
         page.audit(requisition_no)
@@ -220,7 +220,6 @@ class TestPurchase:
     def test_purchase_011_unapproved_apply_not_linkable(
         self,
         purchase_apply_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_apply_page
         page.open_purchase_apply()
@@ -233,7 +232,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["unapproved_requisition_no"] = unapproved_requisition_no
 
         page.open_purchase_order()
         page.open_add_modal()
@@ -272,11 +270,11 @@ class TestPurchase:
     def test_purchase_014_order_link_apply_check(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        requisition_no = flow_data.get("requisition_no")
+        requisition_no = page.create_requisition(PURCHASE_DATA["product"], 1, audit=True)
         assert requisition_no, "采购-014 缺少已审核请购单"
+        page.open_purchase_order()
         page.open_add_modal()
         page.link_bill("linkApply", requisition_no, bill_mode="check")
         row_text = page.get_editable_rows().first.inner_text()
@@ -289,11 +287,11 @@ class TestPurchase:
     def test_purchase_015_order_link_apply_dblclick(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        requisition_no = flow_data.get("requisition_no")
+        requisition_no = page.create_requisition(PURCHASE_DATA["product"], 1, audit=True)
         assert requisition_no, "采购-015 缺少已审核请购单"
+        page.open_purchase_order()
         page.open_add_modal()
         page.link_bill("linkApply", requisition_no, bill_mode="dblclick")
         row_text = page.get_editable_rows().first.inner_text()
@@ -306,7 +304,6 @@ class TestPurchase:
     def test_purchase_016_save_order(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
         page.open_add_modal()
@@ -320,7 +317,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["purchase_order_no"] = purchase_order_no
         assert page.get_status(purchase_order_no) == "未审核", f"采购-016 {purchase_order_no} 状态不是未审核"
 
     @allure.story("采购-017 采购订单必填校验")
@@ -345,10 +341,10 @@ class TestPurchase:
     def test_purchase_018_link_apply_and_save(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        requisition_no = flow_data["requisition_no"]
+        requisition_no = page.create_requisition(PURCHASE_DATA["product"], 1, audit=True)
+        page.open_purchase_order()
         page.open_add_modal()
         linked_purchase_order_no = page.get_form_number()
         assert linked_purchase_order_no, "采购-018 未读取到订单号"
@@ -360,7 +356,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["linked_purchase_order_no"] = linked_purchase_order_no
         row_text = page.get_list_row(linked_purchase_order_no).inner_text()
         assert requisition_no in row_text or "[请]" in row_text, (
             f"采购-018 订单列表未显示请购关联标记，row={row_text[:300]}"
@@ -372,10 +367,10 @@ class TestPurchase:
     def test_purchase_019_unapproved_apply_not_linkable(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        unapproved_requisition_no = flow_data["unapproved_requisition_no"]
+        unapproved_requisition_no = page.create_requisition(PURCHASE_DATA["product"], 1)
+        page.open_purchase_order()
         page.open_add_modal()
         assert not page.has_link_data("linkApply", unapproved_requisition_no), (
             f"采购-019 未审核请购单 {unapproved_requisition_no} 仍可关联"
@@ -388,10 +383,9 @@ class TestPurchase:
     def test_purchase_020_audit_and_unaudit(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        purchase_order_no = flow_data["purchase_order_no"]
+        purchase_order_no = page.create_order(PURCHASE_DATA["supplier"], PURCHASE_DATA["product"], 1, PURCHASE_DATA["price"], PURCHASE_DATA["account"])
         page.audit(purchase_order_no)
         assert page.get_status(purchase_order_no) == "已审核", f"采购-020 {purchase_order_no} 审核后不是已审核"
         page.unaudit(purchase_order_no)
@@ -403,10 +397,9 @@ class TestPurchase:
     def test_purchase_021_audited_order_readonly(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        purchase_order_no = flow_data["purchase_order_no"]
+        purchase_order_no = page.create_order(PURCHASE_DATA["supplier"], PURCHASE_DATA["product"], 1, PURCHASE_DATA["price"], PURCHASE_DATA["account"])
         page.audit(purchase_order_no)
         page.click_row_action(purchase_order_no, "编辑")
         messages = " ".join(page.get_messages())
@@ -421,7 +414,6 @@ class TestPurchase:
     def test_purchase_022_deposit(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
         page.open_purchase_order()
@@ -437,7 +429,6 @@ class TestPurchase:
         page.click_save_and_audit()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["deposit_purchase_order_no"] = deposit_purchase_order_no
         assert page.get_status(deposit_purchase_order_no) == "已审核", f"采购-022 {deposit_purchase_order_no} 未审核"
 
         inbound_modal = page.transfer_to_inbound(deposit_purchase_order_no)
@@ -456,13 +447,13 @@ class TestPurchase:
     def test_purchase_023_partial_inbound(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_page
-        deposit_purchase_order_no = flow_data["deposit_purchase_order_no"]
+        deposit_purchase_order_no = page.create_order(PURCHASE_DATA["supplier"], PURCHASE_DATA["product"], 2, PURCHASE_DATA["price"], PURCHASE_DATA["account"])
+        page.audit(deposit_purchase_order_no)
         page.open_purchase_order()
         page.transfer_to_inbound(deposit_purchase_order_no)
-        page.fill_editable_quantity(4)
+        page.fill_editable_quantity(1)
         page.select_warehouse()
         page.click_save_and_audit()
         page.wait_modal_closed()
@@ -479,7 +470,6 @@ class TestPurchase:
     def test_purchase_024_save_inbound(
         self,
         purchase_in_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_in_page
         page.open_add_modal()
@@ -494,7 +484,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["purchase_receipt_no"] = purchase_receipt_no
         assert page.get_status(purchase_receipt_no) == "未审核", f"采购-024 {purchase_receipt_no} 状态不是未审核"
 
     @allure.story("采购-025 采购入库必填校验")
@@ -521,10 +510,9 @@ class TestPurchase:
     def test_purchase_026_audit_inbound(
         self,
         purchase_in_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_in_page
-        purchase_receipt_no = flow_data["purchase_receipt_no"]
+        purchase_receipt_no = page.create_inbound(PURCHASE_DATA["supplier"], PURCHASE_DATA["product"], 1, PURCHASE_DATA["price"], PURCHASE_DATA["account"], audit=False)
         page.open_purchase_in()
         page.audit(purchase_receipt_no)
         assert page.get_status(purchase_receipt_no) == "已审核", f"采购-026 {purchase_receipt_no} 状态不是已审核"
@@ -545,7 +533,6 @@ class TestPurchase:
     def test_purchase_028_debt_payment(
         self,
         purchase_in_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_in_page
         # 先准备一张金额 100、本次付款 60、本次欠款 40 的已审核入库单
@@ -583,7 +570,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["payment_no"] = payment_no
         row_text = page.get_list_row(payment_no).inner_text()
         assert "40" in row_text, f"采购-028 付款单列表未显示付款 40：{row_text[:300]}"
 
@@ -603,11 +589,21 @@ class TestPurchase:
     def test_purchase_031_return_from_inbound(
         self,
         purchase_back_page: PurchasePage,
-        flow_data: dict,
+        purchase_in_page: PurchasePage,
+        purchase_data: dict,
     ) -> None:
         page = purchase_back_page
-        purchase_receipt_no = flow_data.get("purchase_receipt_no")
+        # 前置：自建一张已审核入库单（不复用其他用例的数据）
+        purchase_receipt_no = purchase_in_page.create_inbound(
+            purchase_data["supplier"],
+            purchase_data["product"],
+            10,
+            purchase_data["price"],
+            purchase_data["account"],
+            audit=True,
+        )
         assert purchase_receipt_no, "采购-031 缺少采购入库单"
+        page.open_purchase_back()
         page.open_add_modal()
         purchase_return_no = page.get_form_number()
         assert purchase_return_no, "采购-031 未读取到采购退货单号"
@@ -617,7 +613,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["purchase_return_no"] = purchase_return_no
         assert page.get_status(purchase_return_no) == "未审核", f"采购-031 {purchase_return_no} 状态不是未审核"
 
     @allure.story("采购-032 新增采购退货并保存")
@@ -626,7 +621,6 @@ class TestPurchase:
     def test_purchase_032_save_return(
         self,
         purchase_back_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_back_page
         page.open_add_modal()
@@ -643,7 +637,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["manual_return_no"] = purchase_return_no
         assert page.get_status(purchase_return_no) == "未审核", (
             f"采购-032 {purchase_return_no} 状态不是未审核"
         )
@@ -695,15 +688,22 @@ class TestPurchase:
     def test_purchase_034_audit_return(
         self,
         purchase_back_page: PurchasePage,
-        flow_data: dict,
+        purchase_data: dict,
     ) -> None:
         page = purchase_back_page
-        return_no = flow_data["manual_return_no"]
+        # 前置：自建一张未审核退货单
+        return_no = page.create_return(
+            purchase_data["supplier"],
+            purchase_data["product"],
+            1,
+            purchase_data["price"],
+            purchase_data["account"],
+            audit=False,
+        )
         page.open_purchase_back()
         page.audit(return_no)
         status = page.get_status(return_no)
         assert status in {"已审核", "完成出库"}, f"采购-034 {return_no} 审核后状态为 {status}"
-        flow_data["audited_return_no"] = return_no
 
     @allure.story("采购-035 已审核退货单编辑/删除限制")
     @pytest.mark.e2e
@@ -711,10 +711,18 @@ class TestPurchase:
     def test_purchase_035_audited_return_readonly(
         self,
         purchase_back_page: PurchasePage,
-        flow_data: dict,
+        purchase_data: dict,
     ) -> None:
         page = purchase_back_page
-        return_no = flow_data["audited_return_no"]
+        # 前置：自建一张已审核退货单
+        return_no = page.create_return(
+            purchase_data["supplier"],
+            purchase_data["product"],
+            1,
+            purchase_data["price"],
+            purchase_data["account"],
+            audit=True,
+        )
         page.open_purchase_back()
         page.click_row_action(return_no, "编辑")
         messages = " ".join(page.get_messages())
@@ -733,7 +741,6 @@ class TestPurchase:
     def test_purchase_036_return_refund_debt(
         self,
         purchase_back_page: PurchasePage,
-        flow_data: dict,
     ) -> None:
         page = purchase_back_page
         page.open_add_modal()
@@ -753,7 +760,6 @@ class TestPurchase:
         page.click_save_only()
         page.wait_modal_closed()
         page.page.wait_for_timeout(800)
-        flow_data["refund_return_no"] = return_no
         row_text = page.get_list_row(return_no).inner_text()
         assert "60" in row_text and "40" in row_text, (
             f"采购-036 列表未显示退款 60/欠款 40：{row_text[:300]}"
@@ -765,7 +771,7 @@ class TestPurchase:
     def test_purchase_037_bill_number_rules(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
+        purchase_data: dict,
     ) -> None:
         page = purchase_page
         order_first, order_second = self._read_number_pair(page, page.open_purchase_order)
@@ -781,7 +787,13 @@ class TestPurchase:
         assert int(return_second[4:]) > int(return_first[4:]), "采购-037 退货单号未自动累加"
 
         # 重复编号：用已有订单号新增，预期后端拒绝
-        existing_order = flow_data["purchase_order_no"]
+        existing_order = page.create_order(
+            purchase_data["supplier"],
+            purchase_data["product"],
+            1,
+            purchase_data["price"],
+            purchase_data["account"],
+        )
         page.open_purchase_order()
         page.open_add_modal()
         page.page.locator("#number:visible").fill(existing_order)
@@ -807,12 +819,20 @@ class TestPurchase:
     def test_purchase_038_combined_query(
         self,
         purchase_page: PurchasePage,
-        flow_data: dict,
+        purchase_data: dict,
     ) -> None:
         page = purchase_page
+        # 前置：自建一张采购订单
+        order_no = page.create_order(
+            purchase_data["supplier"],
+            purchase_data["product"],
+            1,
+            purchase_data["price"],
+            purchase_data["account"],
+        )
         page.open_purchase_order()
-        page.search_by_number(flow_data["purchase_order_no"])
-        assert page.get_list_row(flow_data["purchase_order_no"]).is_visible(), (
+        page.search_by_number(order_no)
+        assert page.get_list_row(order_no).is_visible(), (
             "采购-038 按单号查询未命中"
         )
         page.reset_search()

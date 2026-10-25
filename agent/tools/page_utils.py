@@ -1,6 +1,7 @@
 """page 类分析、步骤匹配、控件缓存加载、代码写入工具。"""
 from __future__ import annotations
 
+import ast
 import json
 import re
 from difflib import SequenceMatcher
@@ -83,14 +84,50 @@ def indent_code(code: str, spaces: int = 4) -> str:
     )
 
 
+def _fix_top_decorator(code: str) -> str:
+    """修复「装饰器顶格、后续行缩进 4」的常见 LLM 输出。
+
+    ``@allure.story`` 顶格 + ``    @pytest`` / ``    def`` + ``        body``
+    -> 所有行统一顶格后，方法体保留 4 空格相对缩进。
+    """
+    lines = code.splitlines()
+    if not lines or not lines[0].lstrip().startswith("@"):
+        return code
+
+    fixed = [lines[0]]
+    for line in lines[1:]:
+        fixed.append(line[4:] if line.startswith("    ") else line)
+    return "\n".join(fixed)
+
+
+def _indent_candidates(code: str) -> list[str]:
+    """按「原样 / 顶格 / 修复顶格装饰器」三种方式尝试缩进。"""
+    return [
+        indent_code(code),
+        indent_code(_fix_top_decorator(code)),
+        indent_code(code.lstrip()),
+    ]
+
+
 def append_code(path: Path, code: str) -> None:
-    """把方法代码追加到文件末尾（缩进到类内）。"""
+    """把方法代码追加到文件末尾（缩进到类内），并做语法校验。"""
     code = strip_fence(code)
     if not code:
         log.warning("没有生成代码，跳过写入：%s", path)
         return
+
     path.parent.mkdir(parents=True, exist_ok=True)
     source = path.read_text(encoding="utf-8").rstrip() if path.exists() else ""
-    path.write_text(source + "\n\n" + indent_code(code) + "\n", encoding="utf-8")
-    log.info("已追加 %s 行到 %s", len(code.splitlines()), path)
 
+    for candidate in _indent_candidates(code):
+        merged = source + "\n\n" + candidate + "\n"
+        try:
+            ast.parse(merged)
+        except SyntaxError as exc:
+            log.debug("候选缩进语法错误（行 %s）：%s", exc.lineno, exc.msg)
+            continue
+        path.write_text(merged, encoding="utf-8")
+        log.info("已追加 %s 行到 %s", len(candidate.splitlines()), path)
+        return
+
+    log.error("生成代码无法通过语法校验，已跳过写入：%s", path)

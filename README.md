@@ -219,6 +219,53 @@ python tools/view_milvus_data.py --search "零售出库页面有哪些按钮"
 pytest testself/test_md_processor.py -v
 pytest testself/test_pdf_processor.py -v -s          # 含 OCR，首次较慢
 pytest testself/test_embedding_retrieval.py -v -s    # 需 Milvus 已启动
+pytest testself/test_agent_stream.py -v              # Agent 流式事件与渲染，不调 LLM
+```
+
+## Agent 代码生成（流式）
+
+`agent/Agents/` 下的控件获取 / 步骤生成 / 最终编排 Agent 默认**流式输出**：
+模型的思考（reasoning）、生成正文、工具调用与工具返回都会实时打印，不再等
+整段结果生成完才显示。
+
+```bash
+# dry-run：只生成、不写文件；思考与代码实时输出
+python -m agent.Agents.pipeline --sheet 采购页 --limit 3
+
+# 关闭流式，等待完整结果后一次性返回
+python -m agent.Agents.pipeline --sheet 采购页 --limit 3 --no-stream
+
+# 确认无误后写回 page/ 与 testcases/
+python -m agent.Agents.pipeline --sheet 采购页 --apply
+```
+
+流式开关（写在根目录 `.env`，不设置时用默认值）：
+
+| 环境变量 | 默认 | 说明 |
+|----------|------|------|
+| `AGENT_STREAM` | `true` | 是否流式输出 |
+| `AGENT_SHOW_THINKING` | `true` | 是否打印模型的思考过程 |
+| `AGENT_STREAM_COLOR` | `auto` | `auto` / `always` / `never` |
+| `AGENT_MAX_TURNS` | `8` | 单个 Agent 最多轮次（含工具调用） |
+
+需要自己消费流式事件（例如接到 Web 界面）时，用异步接口：
+
+```python
+import asyncio
+
+from agent.Agents.step_agent import StepAgent
+
+
+async def main() -> None:
+    agent = StepAgent()
+    async for event in agent.astream("页面类 PurchasePage，点击保存"):
+        if event.kind == "thinking":
+            print("[思考]", event.text, end="")
+        elif event.kind == "content":
+            print("[生成]", event.text, end="")
+
+
+asyncio.run(main())
 ```
 
 ## 数据驱动测试
@@ -260,11 +307,13 @@ class TestLogin:
 - `data/config.yaml`：`base_url`
 - 环境变量（前缀 `PW_`）：`PW_BROWSER_TYPE`、`PW_HEADLESS`、`PW_SLOW_MO`、
   `PW_TRACE_ENABLED`、`PW_VIEWPORT_WIDTH` 等，详见 `pw_core/conf.py`
-- 环境变量（前缀 `RAG_`）：写在根目录 `.env`，分四组，详见 `agent/config.py`
+- 环境变量（RAG 前缀）：写在根目录 `.env`，分四组，详见 `agent/config.py`
   - `RAG_MILVUS_*`：`URI`、`COLLECTION_NAME`、`COLLECTION_ALIAS`、`TIMEOUT`
   - `RAG_EMBEDDING_*`：`MODEL_PATH`、`DEVICE`、`USE_FP16`、`BATCH_SIZE`、`DENSE_DIM`、`MAX_LENGTH`
-  - `RAG_LLM_*`：`API_KEY`、`BASE_URL`、`FAST_MODEL`、`STRONG_MODEL`、`TEMPERATURE`、`MAX_TOKENS`
   - `RAG_SEARCH_*`：`TOP_K`、`DENSE_TOP_K`、`SPARSE_TOP_K`、`RRF_K`、`SCORE_THRESHOLD`
+- 环境变量（LLM / Agent）：`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_FAST_MODEL`、
+  `LLM_STRONG_MODEL`、`LLM_TEMPERATURE`、`LLM_MAX_TOKENS`、`AGENT_STREAM`、
+  `AGENT_SHOW_THINKING`、`AGENT_STREAM_COLOR`、`AGENT_MAX_TURNS`
 
 ```bash
 export PW_BROWSER_TYPE=firefox

@@ -1,0 +1,59 @@
+base_page:
+  MODAL:
+    value: .ant-modal:visible
+    type: css
+  FORM_ERROR:
+    value: .ant-form-explain, .ant-form-item-explain
+    type: css
+  MESSAGE:
+    value: .ant-message-notice-content
+    type: css
+  MODAL_TITLE:
+    value: .ant-modal-title
+    type: css
+  TABLE_ROWS:
+    value: .ant-table:visible .ant-table-tbody tr.ant-table-row
+    type: css
+  TABLE:
+    value: .ant-table:visible
+    type: css
+  GUIDE_ROOT:
+    value: .introjs-overlay, .introjs-tooltip
+    type: css
+purchase_page:
+  ORDER_PATH:
+    value: /bill/purchase_order
+    type: url
+  IN_PATH:
+    value: /bill/purchase_in
+    type: url
+  BACK_PATH:
+    value: /bill/purchase_back
+    type: url
+  CLEANUP_PATHS:
+    value:
+      purchase_apply: /bill/purchase_apply
+      purchase_order: /bill/purchase_order
+      purchase_in: /bill/purchase_in
+      purchase_back: /bill/purchase_back
+      retail_out: /bill/retail_out
+      retail_back: /bill/retail_back
+    type: url_map
+  APPLY_PATH:
+    value: /bill/purchase_apply
+    type: url
+  PAYMENT_PATH:
+    value: /financial/money_out
+    type: url
+retail_page:
+  RETAIL_OUT_PATH:
+    value: /bill/retail_out
+    type: url
+  RETAIL_BACK_PATH:
+    value: /bill/retail_back
+    type: url
+  CLEANUP_PATHS:
+    value:
+      retail_out: /bill/retail_out
+      retail_back: /bill/retail_back
+    type: url_map

@@ -35,15 +35,10 @@ class PurchasePage(BasePage):
         "retail_out": "/bill/retail_out",
         "retail_back": "/bill/retail_back",
     }
-    CLEANUP_MAX_LOOPS = 30
 
     # 只在可见表格内定位，避免命中详情弹窗里的隐藏表格
     TABLE = ".ant-table:visible"
-    TABLE_ROWS = ".ant-table:visible .ant-table-tbody tr.ant-table-row"
     MODAL = ".ant-modal:visible"
-    MODAL_TITLE = ".ant-modal-title"
-    MESSAGE = ".ant-message-notice-content"
-    FORM_ERROR = ".ant-form-explain, .ant-form-item-explain"
     GUIDE_ROOT = ".introjs-overlay, .introjs-tooltip"
 
     def __init__(self) -> None:
@@ -54,85 +49,6 @@ class PurchasePage(BasePage):
     # ------------------------------------------------------------------
     # 基础工具
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _first_visible(locator: Locator) -> Locator:
-        """返回 locator 中第一个可见元素；不存在时抛 AssertionError。"""
-        for index in range(locator.count()):
-            item = locator.nth(index)
-            if item.is_visible():
-                return item
-        raise AssertionError(f"没有找到可见元素：{locator}")
-
-    def _click_button(self, name: re.Pattern[str]) -> None:
-        """点击第一个可见按钮。"""
-        button = self._first_visible(self.page.get_by_role("button", name=name))
-        button.click()
-
-    def _click_text(self, text: str | re.Pattern[str]) -> None:
-        """点击第一个可见文本（用于 Ant Design 的 a 标签按钮）。"""
-        if isinstance(text, str):
-            locator = self.page.get_by_text(text, exact=True)
-        else:
-            locator = self.page.get_by_text(text)
-        self._first_visible(locator).click()
-
-    @allure.step("关闭新手引导遮罩")
-    def dismiss_guide(self) -> None:
-        """关闭采购订单/采购入库首次打开时自动弹出的 intro.js 引导。"""
-        guide = self.page.locator(self.GUIDE_ROOT)
-        if guide.count() == 0:
-            self.page.wait_for_timeout(300)
-        if guide.count() == 0:
-            return
-
-        # intro.js 的“跳过/关闭”按钮
-        for selector in (
-            ".introjs-skipbutton",
-            ".introjs-donebutton",
-            ".introjs-tooltip .introjs-closebutton",
-            ".introjs-tooltip [class*='close']",
-        ):
-            buttons = self.page.locator(selector)
-            for index in range(buttons.count()):
-                item = buttons.nth(index)
-                try:
-                    if item.is_visible():
-                        item.click(force=True)
-                        self.page.wait_for_timeout(300)
-                        break
-                except Exception:
-                    continue
-            if guide.count() == 0:
-                return
-
-        # 键盘 Esc 退出
-        self.page.keyboard.press("Escape")
-        self.page.wait_for_timeout(300)
-        if guide.count() == 0:
-            return
-
-        # 最后兜底：调用 introJs().exit() 并清理残留遮罩/aria-hidden
-        self.page.evaluate(
-            """() => {
-                try { if (window.introJs) window.introJs().exit(true); } catch (e) {}
-                document.querySelectorAll(
-                    '.introjs-overlay, .introjs-tooltipReferenceLayer, .introjs-helperLayer, .introjs-tooltip'
-                ).forEach(el => el.remove());
-                document.querySelectorAll('[aria-hidden="true"]').forEach(
-                    el => el.removeAttribute('aria-hidden')
-                );
-            }"""
-        )
-        self.page.wait_for_timeout(200)
-
-    def _wait_table_idle(self, timeout: int = 15000) -> None:
-        """等待表格 loading 消失；没有 loading 时立即返回。"""
-        spinner = self.page.locator(".ant-spin-spinning")
-        try:
-            spinner.first.wait_for(state="hidden", timeout=timeout)
-        except Exception:
-            pass
 
     def _wait_for_visible_text(
         self,
@@ -169,27 +85,6 @@ class PurchasePage(BasePage):
     def open_purchase_back(self) -> "PurchasePage":
         return self._open(self.BACK_PATH)
 
-    def _open(self, path: str) -> "PurchasePage":
-        log.info(f"activating 打开采购列表 {path}")
-        last_error = None
-        for attempt in range(2):
-            self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded")
-            self.wait_for_load()
-            try:
-                self.wait_for_visible(self.TABLE, timeout=60000)
-                break
-            except Exception as exc:
-                last_error = exc
-                if attempt == 0:
-                    self.page.wait_for_timeout(1500)
-                    continue
-                raise
-        if last_error and self.page.locator(self.TABLE).count() == 0:
-            raise last_error
-        self._wait_table_idle()
-        self.dismiss_guide()
-        return self
-
     # ------------------------------------------------------------------
     # 列表断言与查询
     # ------------------------------------------------------------------
@@ -202,12 +97,6 @@ class PurchasePage(BasePage):
         self._first_visible(
             self.page.get_by_role("button", name=re.compile(r"新\s*增"))
         )
-
-    def get_rows(self) -> Locator:
-        return self.page.locator(self.TABLE_ROWS)
-
-    def get_row_count(self) -> int:
-        return self.get_rows().count()
 
     @allure.step("等待列表渲染完成")
     def wait_for_list_ready(self, timeout: int = 15000) -> int:
@@ -246,42 +135,6 @@ class PurchasePage(BasePage):
             return match.group(0)
         raise AssertionError(f"第一行未找到单据编号：{row.inner_text()[:200]}")
 
-    def get_visible_bill_numbers(self) -> set[str]:
-        """当前可见列表行的单据号集合，用于判断批量操作是否推进。"""
-        numbers: set[str] = set()
-        rows = self.get_rows()
-        for index in range(rows.count()):
-            row_text = rows.nth(index).inner_text()
-            numbers.update(
-                re.findall(r"(?:CGDD|CGRK|CGTH|QGD|LSCK|LSTH)\d{5,}", row_text)
-            )
-        return numbers
-
-    @allure.step("按单据编号查询：{number}")
-    def search_by_number(self, number: str) -> None:
-        self.dismiss_guide()
-        try:
-            input_box = self._first_visible(
-                self.page.get_by_placeholder(re.compile("请输入单据编号"))
-            )
-        except AssertionError:
-            self._click_text(re.compile(r"展\s*开"))
-            input_box = self._first_visible(
-                self.page.get_by_placeholder(re.compile("请输入单据编号"))
-            )
-
-        input_box.fill("")
-        input_box.fill(number)
-        self.dismiss_guide()
-        self._click_button(re.compile(r"查\s*询"))
-        self._wait_table_idle()
-
-    @allure.step("重置查询条件")
-    def reset_search(self) -> None:
-        self.dismiss_guide()
-        self._click_button(re.compile(r"重\s*置"))
-        self._wait_table_idle()
-
     @allure.step("断言列表为空状态")
     def assert_empty_state(self) -> None:
         """列表默认按近 3 天过滤，无数据时应显示 Ant Design 空状态。"""
@@ -298,20 +151,6 @@ class PurchasePage(BasePage):
     # ------------------------------------------------------------------
     # 新增弹窗
     # ------------------------------------------------------------------
-
-    @allure.step("打开新增弹窗")
-    def open_add_modal(self) -> Locator:
-        log.info("activating 点击新增")
-        self.dismiss_guide()
-        self._click_button(re.compile(r"新\s*增"))
-        modal = self.get_modal()
-        modal.wait_for(state="visible", timeout=15000)
-        modal.locator(".ant-form").first.wait_for(state="visible", timeout=10000)
-        self.dismiss_guide()
-        return modal
-
-    def get_modal(self) -> Locator:
-        return self.page.locator(self.MODAL).last
 
     @allure.step("断言新增弹窗标题与字段")
     def assert_add_modal_visible(
@@ -354,27 +193,6 @@ class PurchasePage(BasePage):
             )
         button.click()
 
-    @allure.step("关闭新增弹窗")
-    def close_modal(self) -> None:
-        self.dismiss_guide()
-        modal = self.get_modal()
-        try:
-            button = self._first_visible(
-                modal.get_by_role("button", name=re.compile(r"取\s*消"))
-            )
-        except AssertionError:
-            button = self._first_visible(
-                modal.get_by_role("button", name=re.compile(r"关\s*闭"))
-            )
-        button.click()
-        self.page.wait_for_timeout(400)
-        # 有未保存明细时可能弹出“是否离开”确认
-        if self.page.locator(".ant-modal-confirm:visible").count():
-            self._click_visible_text_button(self.page, "确 定") or self._click_visible_text_button(
-                self.page, "确定"
-            )
-        self.wait_modal_closed(timeout=8000)
-
     @allure.step("断言弹窗仍然可见")
     def assert_modal_visible(self) -> None:
         expect(self.get_modal()).to_be_visible(timeout=5000)
@@ -388,20 +206,9 @@ class PurchasePage(BasePage):
     # 状态
     # ------------------------------------------------------------------
 
-    @allure.step("读取列表状态标签")
-    def get_status_tag_texts(self) -> list[str]:
-        tags = self.page.locator(f"{self.TABLE_ROWS} .ant-tag")
-        texts: list[str] = []
-        for index in range(tags.count()):
-            item = tags.nth(index)
-            if item.is_visible():
-                text = item.inner_text().strip()
-                if text:
-                    texts.append(text)
-        return texts
-
     @allure.step("断言列表状态标签都在允许范围内")
-    def assert_status_tags(self, allowed: set[str]) -> None:
+    def assert_status_tags(self, allowed: set[str] | list[str]) -> None:
+        allowed = set(allowed)
         texts = self.get_status_tag_texts()
         assert texts, "采购列表未显示任何状态标签"
         unknown = sorted(set(texts) - allowed)
@@ -425,43 +232,9 @@ class PurchasePage(BasePage):
     def open_payment_list(self) -> "PurchasePage":
         return self._open(self.PAYMENT_PATH)
 
-    @staticmethod
-    def _click_visible_text_button(
-        scope: Locator,
-        text: str,
-        exclude: str | None = None,
-    ) -> bool:
-        """按按钮 inner_text 点击（兼容 Ant Design 插入空格）。"""
-        text_norm = text.replace(" ", "")
-        exclude_norm = exclude.replace(" ", "") if exclude else None
-        for index in range(scope.locator("button:visible").count()):
-            button = scope.locator("button:visible").nth(index)
-            try:
-                label = button.inner_text().strip()
-            except Exception:
-                continue
-            label_norm = label.replace(" ", "")
-            if text_norm in label_norm and (
-                exclude_norm is None or exclude_norm not in label_norm
-            ):
-                button.click()
-                return True
-        return False
-
-    def get_form_number(self, timeout: int = 15000) -> str:
-        """等待新增弹窗自动生成的 #number 回填后再返回。"""
-        deadline = time.time() + timeout / 1000
-        while time.time() < deadline:
-            try:
-                value = self.page.locator("#number:visible").input_value().strip()
-            except Exception:
-                value = ""
-            if value:
-                return value
-            self.page.wait_for_timeout(200)
-        return ""
-
+    @allure.step("读取付款单号")
     def get_payment_number(self, timeout: int = 15000) -> str:
+        log.info("activating 读取付款单号")
         """付款单新增弹窗的单据编号使用 #billNo。"""
         deadline = time.time() + timeout / 1000
         while time.time() < deadline:
@@ -474,171 +247,25 @@ class PurchasePage(BasePage):
             self.page.wait_for_timeout(200)
         return ""
 
-    def get_editable_rows(self) -> Locator:
-        return self.get_modal().locator(".tbody .tr[id*='tbody-tr']:visible")
-
-    def get_editable_row_count(self) -> int:
-        return self.get_editable_rows().count()
-
-    @allure.step("新增明细行")
-    def click_insert_row(self) -> None:
-        log.info("activating 插入行")
-        assert self._click_visible_text_button(self.get_modal(), "插入行"), "未找到插入行按钮"
-        self.page.wait_for_timeout(400)
-
-    @allure.step("选择明细行复选框")
-    def select_editable_row(self, index: int = 0) -> None:
-        row = self.get_editable_rows().nth(index)
-        row.locator("input[type=checkbox]").first.check()
-
-    @allure.step("移除明细行")
-    def click_remove_row(self) -> None:
-        log.info("activating 移除行")
-        assert self._click_visible_text_button(self.get_modal(), "移除行"), "未找到移除行按钮"
-        self.page.wait_for_timeout(300)
-        self.confirm_popup()
-
-    @allure.step("确认二次弹窗")
-    def confirm_popup(self) -> None:
-        for scope in (
-            self.page.locator(".ant-modal-confirm:visible"),
-            self.page.locator(".ant-popover:visible"),
-            self.page.locator(".ant-modal:visible"),
-        ):
-            if scope.count() == 0:
-                continue
-            if self._click_visible_text_button(scope.last, "确 定") or self._click_visible_text_button(scope.last, "确定"):
-                self.page.wait_for_timeout(300)
-                return
-        # 兜底：全局可见按钮
-        assert (
-            self._click_visible_text_button(self.page, "确 定")
-            or self._click_visible_text_button(self.page, "确定")
-        ), "未找到确认按钮"
-
-    @allure.step("打开商品选择弹窗")
-    def open_product_selector(self, row_index: int = 0) -> Locator:
-        log.info(f"activating 打开商品选择 row={row_index}")
-        row = self.get_editable_rows().nth(row_index)
-        row.locator("button.ant-btn-icon-only").first.click()
-        self.page.wait_for_timeout(700)
-
-        # 主单据弹窗和商品弹窗会同时存在，商品弹窗是最后一个可见 modal
-        for _ in range(10):
-            modals = self.page.locator(".ant-modal:visible")
-            if modals.count() >= 1:
-                product = modals.last
-                try:
-                    title = product.locator(".ant-modal-title").inner_text().strip()
-                except Exception:
-                    title = ""
-                if "选择商品" in title:
-                    return product
-            self.page.wait_for_timeout(300)
-        raise AssertionError("商品选择弹窗未打开")
-
-    def _read_product_stock(self, product: Locator, row: Locator) -> None:
-        """从商品选择弹窗的“库存”列读取当前商品库存。"""
-        try:
-            headers = product.locator(".ant-table-thead th")
-            header_texts = [
-                headers.nth(i).inner_text().strip()
-                for i in range(headers.count())
-            ]
-            index = header_texts.index("库存")
-            cell_text = row.locator("td").nth(index).inner_text().strip()
-            match = re.search(r"[\d,]+(?:\.\d+)?", cell_text)
-            self.last_product_stock = match.group(0).replace(",", "") if match else ""
-            log.info(f"activating 读取商品库存 {self.last_product_stock}")
-            self.last_product_stock = match.group(0).replace(",", "") if match else ""
-        except Exception as exc:
-            log.warning(f"读取商品库存失败：{exc}")
-            self.last_product_stock = ""
-
+    @allure.step("读取商品库存")
     def get_last_product_stock(self) -> str:
+        log.info("activating 读取商品库存")
         return self.last_product_stock
 
-    @allure.step("搜索并选择商品：{keyword}")
-    def choose_product(self, keyword: str, mode: str = "dblclick") -> None:
-        log.info(f"activating 选择商品 {keyword} mode={mode}")
-        modals = self.page.locator(".ant-modal:visible")
-        product = modals.last
-        assert "选择商品" in product.locator(".ant-modal-title").inner_text(), (
-            "当前不是商品选择弹窗"
-        )
-        search = product.locator(
-            "input[placeholder*='条码']:visible, input[placeholder*='关键词']:visible"
-        ).first
-        rows = product.locator(".ant-table-tbody tr.ant-table-row:visible")
-        for attempt in range(3):
-            search.fill("")
-            search.fill(keyword)
-            assert self._click_visible_text_button(product, "查"), "商品弹窗未找到查询按钮"
-            self.page.wait_for_timeout(1000)
-            rows = product.locator(".ant-table-tbody tr.ant-table-row:visible")
-            if rows.count():
-                break
-            log.warning(f"商品查询无结果，重试 {attempt + 1}/3：{keyword}")
-            self.page.wait_for_timeout(800)
-        assert rows.count() > 0, f"商品查询无结果：{keyword}（已重试 3 次）"
-        self._read_product_stock(product, rows.first)
-        if mode == "dblclick":
-            rows.first.dblclick()
-        else:
-            rows.first.locator("input[type=checkbox]").check()
-            assert self._click_visible_text_button(product, "确 定"), "商品弹窗未找到确定按钮"
-        self.page.wait_for_timeout(500)
-
-    def fill_editable_quantity(self, value: str | int, row_index: int = 0) -> None:
-        log.info(f"activating 填写数量 {value} row={row_index}")
-        row = self.get_editable_rows().nth(row_index)
-        row.locator("input[id^='operNumber_']").fill(str(value))
-
-    def fill_editable_price(self, value: str | int, row_index: int = 0) -> None:
-        log.info(f"activating 填写单价 {value} row={row_index}")
-        row = self.get_editable_rows().nth(row_index)
-        row.locator("input[id^='unitPrice_']").fill(str(value))
-
+    @allure.step("填写本次退款/付款金额")
     def fill_change_amount(self, value: str | int) -> None:
+        log.info("activating 填写本次退款/付款金额")
         log.info(f"activating 填写本次退款/付款 {value}")
         self.page.locator("#changeAmount:visible").fill(str(value))
 
+    @allure.step("读取欠款金额")
     def get_debt_value(self) -> str:
+        log.info("activating 读取欠款金额")
         return self.page.locator("#debt:visible").input_value().strip()
 
-    @allure.step("按商品信息查询：{keyword}")
-    def search_by_product(self, keyword: str) -> None:
-        log.info(f"activating 按商品信息查询 {keyword}")
-        self.dismiss_guide()
-        input_box = self._first_visible(
-            self.page.get_by_placeholder(re.compile("请输入条码、名称、助记码"))
-        )
-        input_box.fill("")
-        input_box.fill(keyword)
-        self._click_button(re.compile(r"查\s*询"))
-        self._wait_table_idle()
-
-    @allure.step("保存单据")
-    def click_save_only(self) -> None:
-        log.info("activating 保存单据")
-        assert self._click_visible_text_button(self.get_modal(), "保存（Ctrl+S）"), "未找到保存按钮"
-        self.page.wait_for_timeout(1500)
-
-    @allure.step("保存并审核单据")
-    def click_save_and_audit(self) -> None:
-        log.info("activating 保存并审核")
-        assert self._click_visible_text_button(self.get_modal(), "保存并审核"), "未找到保存并审核按钮"
-        self.page.wait_for_timeout(2000)
-
-    def wait_modal_closed(self, timeout: int = 15000) -> None:
-        deadline = time.time() + timeout / 1000
-        while time.time() < deadline:
-            if self.page.locator(".ant-modal:visible").count() == 0:
-                return
-            self.page.wait_for_timeout(300)
-        raise AssertionError("单据弹窗未关闭")
-
+    @allure.step("选择供应商")
     def select_supplier(self, name: str) -> None:
+        log.info("activating 选择供应商")
         log.info(f"activating 选择供应商 {name}")
         modal = self.get_modal()
         item = modal.locator(".ant-form-item").filter(has_text="供应商").first
@@ -653,7 +280,9 @@ class PurchasePage(BasePage):
         option.click()
         self.page.wait_for_timeout(300)
 
+    @allure.step("选择结算账户")
     def select_account(self, name: str) -> None:
+        log.info("activating 选择结算账户")
         modal = self.get_modal()
         item = modal.locator(".ant-form-item").filter(has_text="结算账户").first
         item.locator(".ant-select").first.click()
@@ -661,84 +290,40 @@ class PurchasePage(BasePage):
         self.page.locator(".ant-select-dropdown:visible li").filter(has_text=name).first.click()
         self.page.wait_for_timeout(300)
 
+    @allure.step("选择仓库")
     def select_warehouse(self, name: str | None = None, row_index: int = 0) -> None:
+        log.info("activating 选择仓库")
         log.info(f"activating 选择仓库 {name or '第一个可用仓库'} row={row_index}")
-        row = self.get_editable_rows().nth(row_index)
-        row.locator(".ant-select").first.click()
+        modal = self.get_modal()
+        # 订单页没有仓库字段；入库/退货的仓库在明细行
+        form_item = modal.locator(".ant-form-item").filter(has_text="仓库").first
+        if form_item.count():
+            target = form_item.locator(".ant-select").first
+        else:
+            target = self.get_editable_rows().nth(row_index).locator(".ant-select").first
+        target.click(force=True)
         self.page.wait_for_timeout(400)
+        self.page.locator(".ant-select-dropdown:visible").last.wait_for(
+            state="visible", timeout=5000
+        )
         options = self.page.locator(".ant-select-dropdown:visible li")
         assert options.count() > 0, "仓库下拉无选项"
         if name:
             options.filter(has_text=name).first.click()
         else:
-            options.first.click()
-        self.page.wait_for_timeout(300)
-
-    def get_list_row(self, number: str) -> Locator:
-        return self.get_rows().filter(has_text=number).first
-
-    def select_list_row(self, number: str) -> None:
-        row = self.get_list_row(number)
-        row.locator("input[type=checkbox]").first.check()
-        self.page.wait_for_timeout(300)
-
-    def get_status(self, number: str) -> str:
-        return self.get_list_row(number).locator(".ant-tag").first.inner_text().strip()
-
-    @allure.step("审核单据：{number}")
-    def audit(self, number: str) -> None:
-        log.info(f"activating 审核 {number}")
-        self.select_list_row(number)
-        assert self._click_visible_text_button(self.page, "审", exclude="反"), "未找到审核按钮"
-        self.page.wait_for_timeout(400)
-        self.confirm_popup()
-        self.page.wait_for_timeout(800)
-
-    @allure.step("反审核单据：{number}")
-    def unaudit(self, number: str) -> None:
-        log.info(f"activating 反审核 {number}")
-        self.select_list_row(number)
-        assert self._click_visible_text_button(self.page, "反审核"), "未找到反审核按钮"
-        self.page.wait_for_timeout(400)
-        self.confirm_popup()
-        self.page.wait_for_timeout(800)
-
-    @allure.step("关联单据：{number}")
-    def link_bill(self, input_id: str, number: str, bill_mode: str = "check") -> None:
-        log.info(f"activating 关联单据 {input_id} -> {number} mode={bill_mode}")
-        modal = self.get_modal()
-        modal.locator(f"#{input_id}").locator(
-            "xpath=..//i[contains(@class,'anticon-search')]"
-        ).first.click()
-        self.page.wait_for_timeout(800)
-
-        link_modal = self.page.locator(".ant-modal:visible").last
-        search = link_modal.locator("input[placeholder*='单据编号']:visible").first
-        search.fill(number)
-        assert self._click_visible_text_button(link_modal, "查"), "关联弹窗未找到查询按钮"
-        self.page.wait_for_timeout(900)
-
-        rows = link_modal.locator(".ant-table-tbody tr.ant-table-row:visible")
-        assert rows.count() > 0, f"关联弹窗查询无数据：{number}"
-        if bill_mode == "dblclick":
-            rows.first.dblclick()
-        else:
-            checkbox = rows.first.locator("input[type=checkbox], input[type=radio]")
-            if checkbox.count():
-                checkbox.first.check()
+            # 跳过禁用项（"需在商品管理先新增才能使用"）
+            for index in range(options.count()):
+                item = options.nth(index)
+                if item.get_attribute("aria-disabled") != "true":
+                    item.click()
+                    break
             else:
-                rows.first.click()
-            assert self._click_visible_text_button(link_modal, "确 定"), "关联弹窗未找到确定按钮"
-        self.page.wait_for_timeout(700)
+                raise AssertionError("仓库下拉无可用选项")
+        self.page.wait_for_timeout(300)
 
-        detail_modal = self.page.locator(".ant-modal:visible").last
-        detail_rows = detail_modal.locator(".ant-table-tbody tr.ant-table-row:visible")
-        assert detail_rows.count() > 0, "单据明细为空"
-        detail_rows.first.locator("input[type=checkbox]").check()
-        assert self._click_visible_text_button(detail_modal, "确 定"), "明细弹窗未找到确定按钮"
-        self.page.wait_for_timeout(700)
-
+    @allure.step("判断是否已关联单据")
     def has_link_data(self, input_id: str, number: str) -> bool:
+        log.info("activating 判断是否已关联单据")
         """打开关联弹窗搜索单号，返回是否有数据；用于 010/018 反例。"""
         modal = self.get_modal()
         modal.locator(f"#{input_id}").locator(
@@ -757,24 +342,6 @@ class PurchasePage(BasePage):
             self.page.keyboard.press("Escape")
         self.page.wait_for_timeout(400)
         return count > 0
-
-    @allure.step("点击列表行操作：{number} / {action}")
-    def click_row_action(self, number: str, action: str) -> None:
-        log.info(f"activating 点击行操作 {number} / {action}")
-        row = self.get_list_row(number)
-        row.get_by_text(action, exact=True).first.click()
-        self.page.wait_for_timeout(600)
-
-    def get_messages(self) -> list[str]:
-        locator = self.page.locator(
-            ".ant-message-notice-content:visible, .ant-form-explain:visible, "
-            ".ant-form-item-explain:visible"
-        )
-        return [
-            locator.nth(i).inner_text().strip()
-            for i in range(locator.count())
-            if locator.nth(i).inner_text().strip()
-        ]
 
     def get_visible_error_count(self) -> int:
         return self.page.locator(
@@ -845,13 +412,6 @@ class PurchasePage(BasePage):
     # 类级测试数据清理
     # ------------------------------------------------------------------
 
-    def open_cleanup_module(self, module_key: str) -> "PurchasePage":
-        path = self.CLEANUP_PATHS.get(module_key)
-        if not path:
-            raise RuntimeError(f"未知清理模块：{module_key}")
-        log.info(f"activating 清理模块 {module_key}")
-        return self._open(path)
-
     def _search_panel(self) -> Locator:
         return self.page.locator(".table-page-search-wrapper:visible").first
 
@@ -863,191 +423,147 @@ class PurchasePage(BasePage):
                 return item.first
         return panel.locator(".ant-form-item").filter(has_text="___not_found___")
 
-    def expand_search_filters(self) -> None:
-        self.dismiss_guide()
-        if self._status_form_item().count():
-            return
-        toggle = self.page.get_by_text(re.compile(r"展\s*开")).filter(visible=True)
-        log.info(f"清理展开按钮数量={toggle.count()}")
-        if toggle.count():
-            toggle.first.click()
-            self.page.wait_for_timeout(800)
-        if not self._status_form_item().count():
-            panel = self._search_panel()
-            labels = [panel.locator("label").nth(i).inner_text() for i in range(panel.locator("label").count())]
-            selects = [panel.locator(".ant-select").nth(i).inner_text() for i in range(panel.locator(".ant-select").count())]
-            log.info(f"清理搜索面板 labels={labels}, selects={selects}, text={panel.inner_text()[:500]}")
-            raise RuntimeError("列表展开后未找到“单据状态”筛选")
+    # ------------------------------------------------------------------
+    # 测试数据准备 / 清理（fixture 专用）
+    # ------------------------------------------------------------------
 
-    def set_today_range(self) -> None:
-        """将单据日期设置为今天~今天；失败则抛错，避免误删历史数据。"""
-        today = date.today().strftime("%Y-%m-%d")
-        inputs = self.page.locator("input.ant-calendar-range-picker-input:visible")
-        if inputs.count() < 2:
-            raise RuntimeError("列表未找到单据日期范围控件")
-        start, end = inputs.nth(0), inputs.nth(1)
+    @allure.step("创建请购单：{product} x {quantity}")
+    def create_requisition(
+        self, product: str, quantity: int | str = 1, audit: bool = False
+    ) -> str:
+        self.open_purchase_apply()
+        self.open_add_modal()
+        number = self.get_form_number()
+        self.open_product_selector(0)
+        self.choose_product(product, mode="dblclick")
+        self.fill_editable_quantity(quantity)
+        if audit:
+            self.click_save_and_audit()
+        else:
+            self.click_save_only()
+        self.wait_modal_closed()
+        if audit:
+            self.wait_for_status(number, "已审核")
+        return number
 
-        # 日期范围输入框是 readonly，直接点击打开日历，再操作日历内的输入框
-        try:
-            start.click(force=True)
-            self.page.wait_for_timeout(500)
-            panel = self.page.locator(".ant-calendar-picker-container:visible").last
-            if panel.count():
-                panel.locator("input.ant-calendar-input").first.fill(today)
-                panel.locator("input.ant-calendar-input").first.press("Enter")
-                self.page.wait_for_timeout(400)
+    @allure.step("创建采购订单：{product} x {quantity}")
+    def create_order(
+        self,
+        supplier: str,
+        product: str,
+        quantity: int | str = 1,
+        price: float | str = 0.5,
+        account: str = "账户1",
+    ) -> str:
+        self.open_purchase_order()
+        self.open_add_modal()
+        number = self.get_form_number()
+        self.select_supplier(supplier)
+        self.open_product_selector(0)
+        self.choose_product(product, mode="dblclick")
+        self.fill_editable_quantity(quantity)
+        self.fill_editable_price(price)
+        self.select_account(account)
+        self.click_save_only()
+        self.wait_modal_closed()
+        return number
 
-            end.click(force=True)
-            self.page.wait_for_timeout(500)
-            panel = self.page.locator(".ant-calendar-picker-container:visible").last
-            if panel.count():
-                panel.locator("input.ant-calendar-input").first.fill(today)
-                panel.locator("input.ant-calendar-input").first.press("Enter")
-            self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(400)
-            if start.input_value().strip() == today and end.input_value().strip() == today:
-                log.info(f"activating 清理日期范围 {today} ~ {today}")
+    @allure.step("创建采购入库单：{product} x {quantity}")
+    def create_inbound(
+        self,
+        supplier: str,
+        product: str,
+        quantity: int | str = 1,
+        price: float | str = 0.5,
+        account: str = "账户1",
+        audit: bool = True,
+    ) -> str:
+        self.open_purchase_in()
+        self.open_add_modal()
+        number = self.get_form_number()
+        self.select_supplier(supplier)
+        self.select_warehouse()
+        self.open_product_selector(0)
+        self.choose_product(product, mode="dblclick")
+        self.fill_editable_quantity(quantity)
+        self.fill_editable_price(price)
+        self.select_account(account)
+        if audit:
+            self.click_save_and_audit()
+        else:
+            self.click_save_only()
+        self.wait_modal_closed()
+        if audit:
+            self.wait_for_status(number, "已审核")
+        return number
+
+    @allure.step("创建采购退货单：{product} x {quantity}")
+    def create_return(
+        self,
+        supplier: str,
+        product: str,
+        quantity: int | str = 1,
+        price: float | str = 0.5,
+        account: str = "账户1",
+        audit: bool = False,
+    ) -> str:
+        self.open_purchase_back()
+        self.open_add_modal()
+        number = self.get_form_number()
+        self.select_supplier(supplier)
+        self.select_warehouse()
+        self.open_product_selector(0)
+        self.choose_product(product, mode="dblclick")
+        self.fill_editable_quantity(quantity)
+        self.fill_editable_price(price)
+        self.select_account(account)
+        if audit:
+            self.click_save_and_audit()
+        else:
+            self.click_save_only()
+        self.wait_modal_closed()
+        if audit:
+            self.wait_for_status(number, "已审核")
+        return number
+
+    @allure.step("转采购退货：{number}")
+    def transfer_to_return(self, number: str) -> None:
+        """勾选入库单，点列表上方工具栏的「转采购退货」按钮（与「新增」同一层）。"""
+        self.select_list_row(number)
+        self.page.get_by_role("button", name="转采购退货").first.click()
+        self.page.wait_for_timeout(800)
+
+    @allure.step("等待单据状态：{number} -> {expected}")
+    def wait_for_status(self, number: str, expected: str, timeout: int = 15000) -> None:
+        """轮询列表状态，直到等于 expected 或超时。"""
+        deadline = time.time() + timeout / 1000
+        last = ""
+        while time.time() < deadline:
+            try:
+                last = self.get_status(number)
+            except Exception:
+                last = ""
+            if last == expected:
                 return
-        except Exception as exc:
-            log.warning(f"日期输入失败，尝试日历选择：{exc}")
+            self.page.wait_for_timeout(500)
+        raise AssertionError(f"单据 {number} 状态未变为 {expected}，当前 {last}")
 
-        # 回退：通过日历中的今天单元格选择
+    @allure.step("删除单据：{number}")
+    def delete_bill(self, number: str, module: str = "purchase_apply") -> None:
+        """按单号反审核并删除；单据不存在时静默跳过。"""
         try:
-            start.click(force=True)
-            self.page.wait_for_timeout(300)
-            panel = self.page.locator(".ant-calendar-picker-container:visible").last
-            today_cell = panel.locator(f"td[title='{today}'], .ant-calendar-date[title='{today}']")
-            if not today_cell.count():
-                raise RuntimeError(f"日历中未找到今天：{today}")
-            today_cell.first.click()
-            end.click(force=True)
-            self.page.wait_for_timeout(300)
-            panel = self.page.locator(".ant-calendar-picker-container:visible").last
-            today_cell = panel.locator(f"td[title='{today}'], .ant-calendar-date[title='{today}']")
-            today_cell.last.click()
-            self.page.keyboard.press("Escape")
-            self.page.wait_for_timeout(300)
-            if start.input_value().strip() == today and end.input_value().strip() == today:
-                log.info(f"activating 清理日期范围 {today} ~ {today}")
+            self.open_cleanup_module(module)
+            row = self.get_list_row(number)
+            if row.count() == 0:
                 return
-        except Exception as exc:
-            raise RuntimeError(f"设置今天日期范围失败：{exc}") from exc
+            status = self.get_status(number)
+            if status in {"已审核", "完成出库", "完成采购"}:
+                self.click_row_action(number, "反审核")
+                self.confirm_popup()
+                self.page.wait_for_timeout(500)
+            self.click_row_action(number, "删除")
+            self.confirm_popup()
+            self.page.wait_for_timeout(500)
+        except Exception:
+            pass
 
-        raise RuntimeError(
-            f"设置今天日期范围失败：开始={start.input_value()!r}, 结束={end.input_value()!r}"
-        )
-
-    def select_bill_status(self, status: str) -> None:
-        self.dismiss_guide()
-        item = self._status_form_item()
-        if not item.count():
-            raise RuntimeError("未找到单据状态筛选项")
-        select = item.locator(".ant-select").first
-        select.click()
-        self.page.wait_for_timeout(400)
-        options = self.page.locator(".ant-select-dropdown:visible li")
-        target = options.filter(has_text=status).first
-        if not target.count():
-            raise RuntimeError(f"单据状态下拉未找到：{status}")
-        target.click()
-        self.page.wait_for_timeout(300)
-        log.info(f"activating 清理状态筛选 {status}")
-
-    def click_search(self) -> None:
-        self._click_button(re.compile(r"查\s*询"))
-        self._wait_table_idle()
-        self.page.wait_for_timeout(300)
-
-    def select_all_current_page(self) -> int:
-        rows = self.get_rows()
-        count = rows.count()
-        if count == 0:
-            return 0
-        header = self.page.locator(f"{self.TABLE} thead input[type=checkbox]").first
-        if not header.count():
-            raise RuntimeError("表格未找到全选复选框")
-        if not header.is_checked():
-            header.check(force=True)
-            self.page.wait_for_timeout(300)
-        selected = self.page.locator(
-            f"{self.TABLE} tbody tr.ant-table-row input[type=checkbox]:checked"
-        ).count()
-        if selected < count:
-            raise RuntimeError(f"全选未生效：行数={count}, 已选={selected}")
-        log.info(f"activating 当前页全选 {count} 行")
-        return count
-
-    def batch_unaudit(self) -> None:
-        if not self._click_visible_text_button(self.page, "反审核"):
-            raise RuntimeError("未找到反审核按钮")
-        self.page.wait_for_timeout(500)
-        self.confirm_popup()
-        self.page.wait_for_timeout(1000)
-        log.info("activating 批量反审核")
-
-    def batch_delete(self) -> None:
-        if not self._click_visible_text_button(self.page, "删除"):
-            raise RuntimeError("未找到删除按钮")
-        self.page.wait_for_timeout(500)
-        self.confirm_popup()
-        self.page.wait_for_timeout(1000)
-        log.info("activating 批量删除")
-
-    def cleanup_module(self, module_key: str, dry_run: bool = False) -> dict:
-        """清理今日已审核/未审核单据；其他状态跳过并记录。"""
-        self.open_cleanup_module(module_key)
-        self.expand_search_filters()
-        self.set_today_range()
-        self.select_bill_status("已审核")
-        self.click_search()
-
-        audited = 0
-        for _ in range(self.CLEANUP_MAX_LOOPS):
-            count = self.select_all_current_page()
-            if count == 0:
-                break
-            if dry_run:
-                audited += count
-                log.info(f"[cleanup dry-run] {module_key} 已审核待反审核 {count} 条")
-                break
-            before_numbers = self.get_visible_bill_numbers()
-            self.batch_unaudit()
-            audited += count
-            self.click_search()
-            after_numbers = self.get_visible_bill_numbers()
-            if before_numbers and before_numbers == after_numbers:
-                raise RuntimeError(
-                    f"{module_key} 反审核后当前页单据未变化，停止清理"
-                )
-
-        self.select_bill_status("未审核")
-        self.click_search()
-        deleted = 0
-        for _ in range(self.CLEANUP_MAX_LOOPS):
-            count = self.select_all_current_page()
-            if count == 0:
-                break
-            if dry_run:
-                deleted += count
-                log.info(f"[cleanup dry-run] {module_key} 未审核待删除 {count} 条")
-                break
-            before_numbers = self.get_visible_bill_numbers()
-            self.batch_delete()
-            deleted += count
-            self.click_search()
-            after_numbers = self.get_visible_bill_numbers()
-            if before_numbers and before_numbers == after_numbers:
-                raise RuntimeError(
-                    f"{module_key} 删除后当前页单据未变化，停止清理"
-                )
-
-        remaining = self.get_status_tag_texts()
-        skipped = sorted(set(remaining) - {"未审核", "已审核"})
-        result = {
-            "module": module_key,
-            "audited": audited,
-            "deleted": deleted,
-            "remaining_statuses": skipped,
-        }
-        log.info(f"[cleanup] {result}")
-        return result

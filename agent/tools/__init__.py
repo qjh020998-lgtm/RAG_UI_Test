@@ -25,11 +25,22 @@ from agent.tools.page_utils import (
     load_control_cache,
     strip_fence,
 )
+from agent.tools.step_registry import (
+    TOOL_SPEC as STEP_REGISTRY_SPEC,
+    build_registry,
+    diff_registry,
+    refresh_registry,
+    write_registry,
+)
 
 TOOL_REGISTRY: dict[str, dict] = {
     PAGE_ELEMENT_SEARCH_SPEC["name"]: {
         "spec": PAGE_ELEMENT_SEARCH_SPEC,
         "func": search_page_elements,
+    },
+    STEP_REGISTRY_SPEC["name"]: {
+        "spec": STEP_REGISTRY_SPEC,
+        "func": refresh_registry,
     },
 }
 
@@ -37,6 +48,11 @@ __all__ = [
     "TOOL_REGISTRY",
     "PAGE_ELEMENT_SEARCH_SPEC",
     "search_page_elements",
+    "STEP_REGISTRY_SPEC",
+    "build_registry",
+    "diff_registry",
+    "refresh_registry",
+    "write_registry",
     "XLSX_DEFAULT",
     "REQUIRED_COLUMNS",
     "load_pending_cases",

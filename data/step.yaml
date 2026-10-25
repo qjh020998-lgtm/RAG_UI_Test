@@ -1,0 +1,775 @@
+base_page:
+  get_modal:
+    step: 获取弹窗
+    args: []
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+  wait_modal_closed:
+    step: 等待弹窗关闭
+    args:
+    - timeout
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+    side_effect:
+    - closes_modal
+  dismiss_guide:
+    step: 关闭新手引导遮罩
+    args: []
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  get_editable_rows:
+    step: 获取明细行
+    args: []
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+  select_editable_row:
+    step: 选择明细行复选框
+    args:
+    - index
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  click_remove_row:
+    step: 移除明细行
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  confirm_popup:
+    step: 确认二次弹窗
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  get_list_row:
+    step: 获取列表行
+    args:
+    - number
+    returns: Locator
+    kind: step
+    scope: list
+    module: common
+  get_status:
+    step: 读取单据状态
+    args:
+    - number
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    stale: false
+  audit:
+    step: 审核单据：{number}
+    args:
+    - number
+    returns: None
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - changes_status
+  unaudit:
+    step: 反审核单据：{number}
+    args:
+    - number
+    returns: None
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - changes_status
+  choose_product:
+    step: 搜索并选择商品：{keyword}
+    args:
+    - keyword
+    - mode
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  open_product_selector:
+    step: 打开商品选择弹窗
+    args:
+    - row_index
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+  click_insert_row:
+    step: 新增明细行
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  click_row_action:
+    step: 点击列表行操作：{number} / {action}
+    args:
+    - number
+    - action
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  click_save_and_audit:
+    step: 保存并审核单据
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  click_save_only:
+    step: 保存单据
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  close_modal:
+    step: 关闭新增弹窗
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+    side_effect:
+    - closes_modal
+  fill_editable_price:
+    step: 填写明细单价
+    args:
+    - value
+    - row_index
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  fill_editable_quantity:
+    step: 填写明细数量
+    args:
+    - value
+    - row_index
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  get_editable_row_count:
+    step: 读取明细行数
+    args: []
+    returns: int
+    kind: step
+    scope: create_modal
+    module: common
+  get_form_number:
+    step: 读取单据编号
+    args:
+    - timeout
+    returns: str
+    kind: step
+    scope: create_modal
+    module: common
+    stale: false
+  get_messages:
+    step: 读取页面提示消息
+    args: []
+    returns: list[str]
+    kind: step
+    scope: create_modal
+    module: common
+  get_row_count:
+    step: 读取列表行数
+    args: []
+    returns: int
+    kind: step
+    scope: list
+    module: common
+    stale: false
+  link_bill:
+    step: 关联单据：{number}
+    args:
+    - input_id
+    - number
+    - bill_mode
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  open_add_modal:
+    step: 打开新增弹窗
+    args: []
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+    side_effect:
+    - opens_modal
+  reset_search:
+    step: 重置查询条件
+    args: []
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  search_by_number:
+    step: 按单据编号查询：{number}
+    args:
+    - number
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  search_by_product:
+    step: 按商品信息查询：{keyword}
+    args:
+    - keyword
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  get_status_tag_texts:
+    step: 读取列表状态标签
+    args: []
+    returns: list[str]
+    kind: step
+    scope: list
+    module: common
+  back_to_home:
+    step: 回到 ERP 首页
+    args:
+    - home_url
+    returns: None
+    kind: step
+    scope: list
+    module: common
+purchase_page:
+  open_purchase_order:
+    step: 打开采购订单列表
+    args: []
+    returns: PurchasePage
+    kind: step
+    scope: list
+    module: purchase_order
+    side_effect:
+    - navigates
+  open_purchase_in:
+    step: 打开采购入库列表
+    args: []
+    returns: PurchasePage
+    kind: step
+    scope: list
+    module: purchase_in
+    side_effect:
+    - navigates
+  open_purchase_back:
+    step: 打开采购退货列表
+    args: []
+    returns: PurchasePage
+    kind: step
+    scope: list
+    module: purchase_back
+    side_effect:
+    - navigates
+  assert_page_loaded:
+    step: 断言采购页面已加载：{module_name}
+    args:
+    - module_name
+    - url_fragment
+    returns: None
+    kind: assert
+    scope: list
+    module: common
+  wait_for_list_ready:
+    step: 等待列表渲染完成
+    args:
+    - timeout
+    returns: int
+    kind: step
+    scope: list
+    module: common
+  get_first_row_number:
+    step: 读取列表第一行单据编号
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  assert_empty_state:
+    step: 断言列表为空状态
+    args: []
+    returns: None
+    kind: assert
+    scope: list
+    module: common
+  assert_row_exists:
+    step: 断言列表存在单据：{number}
+    args:
+    - number
+    returns: None
+    kind: assert
+    scope: list
+    module: common
+  assert_add_modal_visible:
+    step: 断言新增弹窗标题与字段
+    args:
+    - module_name
+    - labels
+    returns: None
+    kind: assert
+    scope: create_modal
+    module: common
+  assert_material_table_visible:
+    step: 断言新增弹窗包含商品明细表
+    args: []
+    returns: None
+    kind: assert
+    scope: create_modal
+    module: common
+  click_save:
+    step: 点击保存
+    args: []
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  assert_modal_visible:
+    step: 断言弹窗仍然可见
+    args: []
+    returns: None
+    kind: assert
+    scope: create_modal
+    module: common
+  assert_validation_message:
+    step: 断言出现校验提示：{text}
+    args:
+    - text
+    returns: None
+    kind: assert
+    scope: create_modal
+    module: common
+  assert_status_tags:
+    step: 断言列表状态标签都在允许范围内
+    args:
+    - allowed
+    returns: None
+    kind: assert
+    scope: list
+    module: common
+  open_purchase_apply:
+    step: 打开请购单列表
+    args: []
+    returns: PurchasePage
+    kind: step
+    scope: list
+    module: purchase_apply
+    side_effect:
+    - navigates
+  open_payment_list:
+    step: 打开付款单列表
+    args: []
+    returns: PurchasePage
+    kind: step
+    scope: list
+    module: common
+  get_payment_number:
+    step: 读取付款单号
+    args:
+    - timeout
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  get_last_product_stock:
+    step: 读取商品库存
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    stale: true
+    requires:
+    - open_add_modal
+    - open_product_selector
+  fill_change_amount:
+    step: 填写本次退款/付款金额
+    args:
+    - value
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  get_debt_value:
+    step: 读取欠款金额
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  select_supplier:
+    step: 选择供应商
+    args:
+    - name
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  select_account:
+    step: 选择结算账户
+    args:
+    - name
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  select_warehouse:
+    step: 选择仓库
+    args:
+    - name
+    - row_index
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  has_link_data:
+    step: 判断是否已关联单据
+    args:
+    - input_id
+    - number
+    returns: bool
+    kind: step
+    scope: list
+    module: common
+  transfer_to_inbound:
+    step: 转采购入库：{number}
+    args:
+    - number
+    returns: Locator
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - opens_modal
+  choose_payment_bill:
+    step: 付款单选择采购欠款单据：{number}
+    args:
+    - number
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  fill_payment_amount:
+    step: 付款单填写本次付款：{value}
+    args:
+    - value
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  create_requisition:
+    step: 创建请购单：{product} x {quantity}
+    args:
+    - product
+    - quantity
+    - audit
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - navigates
+    - creates_bill
+  create_order:
+    step: 创建采购订单：{product} x {quantity}
+    args:
+    - supplier
+    - product
+    - quantity
+    - price
+    - account
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - navigates
+    - creates_bill
+  create_inbound:
+    step: 创建采购入库单：{product} x {quantity}
+    args:
+    - supplier
+    - product
+    - quantity
+    - price
+    - account
+    - audit
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - navigates
+    - creates_bill
+  create_return:
+    step: 创建采购退货单：{product} x {quantity}
+    args:
+    - supplier
+    - product
+    - quantity
+    - price
+    - account
+    - audit
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - navigates
+    - creates_bill
+  transfer_to_return:
+    step: 转采购退货：{number}
+    args:
+    - number
+    returns: None
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - opens_modal
+  wait_for_status:
+    step: 等待单据状态：{number} -> {expected}
+    args:
+    - number
+    - expected
+    - timeout
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  delete_bill:
+    step: 删除单据：{number}
+    args:
+    - number
+    - module
+    returns: None
+    kind: step
+    scope: list
+    module: common
+    side_effect:
+    - navigates
+    - deletes_bill
+retail_page:
+  open_retail_out:
+    step: 打开零售出库列表
+    args: []
+    returns: RetailPage
+    kind: step
+    scope: list
+    module: retail_out
+  open_retail_back:
+    step: 打开零售退货列表
+    args: []
+    returns: RetailPage
+    kind: step
+    scope: list
+    module: retail_back
+  get_list_headers:
+    step: 读取列表表头
+    args: []
+    returns: list[str]
+    kind: step
+    scope: list
+    module: common
+  get_visible_button_labels:
+    step: 读取可见按钮
+    args: []
+    returns: list[str]
+    kind: step
+    scope: list
+    module: common
+  get_modal_text:
+    step: 读取弹窗文本
+    args: []
+    returns: str
+    kind: step
+    scope: create_modal
+    module: common
+  select_member:
+    step: 选择会员卡号
+    args:
+    - index
+    returns: str
+    kind: step
+    scope: create_modal
+    module: common
+  get_member_text:
+    step: 读取会员卡号
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  get_payment_type_text:
+    step: 读取收款类型
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  get_payment_type_options:
+    step: 读取收款类型选项
+    args: []
+    returns: list[str]
+    kind: step
+    scope: list
+    module: common
+  fill_received_amount:
+    step: 填写收款/付款金额：{value}
+    args:
+    - value
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  get_received_amount:
+    step: 读取收款金额
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  get_change_amount:
+    step: 读取找零金额
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  delete_editable_row:
+    step: 删除明细行
+    args:
+    - index
+    returns: None
+    kind: step
+    scope: list
+    module: common
+  convert_to_retail_return:
+    step: 零售出库转零售退货：{number}
+    args:
+    - number
+    returns: Locator
+    kind: step
+    scope: list
+    module: common
+  get_linked_number:
+    step: 读取关联单号
+    args: []
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  get_status_of_row:
+    step: 读取单据状态
+    args:
+    - number
+    returns: str
+    kind: step
+    scope: list
+    module: common
+  has_button:
+    step: 判断按钮是否存在
+    args:
+    - text
+    returns: bool
+    kind: step
+    scope: list
+    module: common
+fixtures:
+  auth_config:
+    kind: setup
+    scope: class
+    returns: dict
+  browser_session:
+    kind: setup
+    scope: class
+    returns: ''
+  class_context:
+    kind: setup
+    scope: class
+    returns: ''
+  class_page:
+    kind: setup
+    scope: class
+    returns: ''
+  class_driver:
+    kind: setup
+    scope: class
+    returns: ''
+  driver:
+    kind: setup
+    scope: function
+    returns: ''
+  home_guard:
+    kind: setup
+    scope: function
+    returns: ''
+  pw_page:
+    kind: setup
+    scope: function
+    returns: ''
+  screenshot_on_failure:
+    kind: setup
+    scope: function
+    returns: ''
+  login_page:
+    kind: setup
+    scope: function
+    returns: LoginPage
+  logged_in_page:
+    kind: setup
+    scope: function
+    returns: Page
+  flow_data:
+    kind: setup
+    scope: class
+    returns: dict
+  purchase_data:
+    kind: setup
+    scope: session
+    returns: dict
+  cleanup_registry:
+    kind: setup
+    scope: class
+    returns: set[str]
+  purchase_apply_page:
+    kind: setup
+    scope: function
+    returns: PurchasePage
+  purchase_page:
+    kind: setup
+    scope: function
+    returns: PurchasePage
+  purchase_in_page:
+    kind: setup
+    scope: function
+    returns: PurchasePage
+  purchase_back_page:
+    kind: setup
+    scope: function
+    returns: PurchasePage
+  retail_out_page:
+    kind: setup
+    scope: function
+    returns: RetailPage
+  retail_back_page:
+    kind: setup
+    scope: function
+    returns: RetailPage
