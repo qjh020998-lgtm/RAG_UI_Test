@@ -66,6 +66,12 @@ class FinalAgent(BaseAgent):
         "你是 pytest 测试代码生成器。根据 Excel 用例、已注册的 page step（带 scope/module）、"
         "控件清单、数据锚点，生成新的测试方法。"
         "只输出要追加的方法代码，不要输出整文件，不要解释。"
+        "\n\n## 代码校验规则（违反会导致生成失败）："
+        "\n1. PURCHASE_DATA[\"xxx\"] 的 key 必须在数据锚点里（supplier/warehouse/product/product_alt/account/price）"
+        "\n2. 只能调用已注册的 page 方法（见 step 清单）"
+        "\n3. 每个 assert 必须有中文失败提示，如：assert x == 1, f\"采购-001 数量应为1，实际：{x}\""
+        "\n4. 装饰器顺序：@allure.story → @pytest.mark.regression → @pytest.mark.web → def test_xxx"
+        "\n5. fixture 参数必须是已注册的（如 purchase_apply_page）"
     )
 
     def generate_tests(
@@ -80,6 +86,7 @@ class FinalAgent(BaseAgent):
         purchase_data: dict,
         existing_tests: str,
         fixture: str,
+        enums: dict[str, list[str]] | None = None,
         stream: bool | None = None,
         previous_code: str = "",
         previous_errors: list[str] | None = None,
@@ -116,6 +123,11 @@ class FinalAgent(BaseAgent):
 {error_lines}
 """
 
+        enum_lines = ""
+        if enums:
+            for key, values in enums.items():
+                enum_lines += f"- {key}: {'、'.join(values)}\n"
+
         prompt = f"""测试工作表：{sheet}
 页面类：{page_class}
 测试 fixture：{fixture}
@@ -125,6 +137,9 @@ class FinalAgent(BaseAgent):
 {data_lines}
 ```
 使用方式：`PURCHASE_DATA["supplier"]`
+
+## 枚举值（断言状态时只能用这些，禁止自己编）
+{enum_lines}
 
 ## setup（fixture，可直接用）
 {fixture_lines}
@@ -154,6 +169,7 @@ class FinalAgent(BaseAgent):
 
 {retry_hint}
 ## 硬性规则
+0. **输入 {len(cases)} 条用例，必须输出 {len(cases)} 个 test_ 方法，一条不能少**（硬性要求，少一条都不合格）；
 1. 方法签名必须是 `def test_xxx(self, {fixture}: {page_class}) -> None`，第一个参数是 self；
 2. 装饰器顺序：@allure.story("<编号> <简短描述>")、@pytest.mark.regression、@pytest.mark.web；
 3. **需要前置单据时调 create_xxx(...) 自建，不要编造单据编号**；
@@ -166,6 +182,13 @@ class FinalAgent(BaseAgent):
 10. **`transfer_to_return(number)` 会自动打开退货单弹窗，调用后不要再 `open_add_modal()`**；
 11. **断言提示文本时，优先用 Excel「预期结果」里的关键词；如果关键词太具体（如"不能大于可退数量"），
     改用更宽的关键词（如"数量"），并用 `assert_modal_visible()` 作为"被拦截"的主证据**。
+12. **关联单据统一 `open_link_search("关联")` + `search_requisition_link(no)`**；
+    不要自己写 `get_by_role('button', name='图标: search')`，也不要把 label 写死成“关联请购单”；
+13. **商品关键词输入只用 `fill_product_search_keyword(...)`**，不要自己写 combobox/placeholder locator；
+14. **fixture 已经打开了列表页，不要再调 `open_purchase_apply()`**（会叠加页面/弹窗状态）；
+15. **每条用例必须以 assert 或 assert_* 结尾，禁止 `order_no = page.get` 这类半截代码**；
+16. **同批输出不得有同名 test；同一 case id 已有测试时跳过，不要重复生成**；
+17. **选择商品弹窗按标题“选择商品”定位，禁止用 `.ant-modal:visible` 的 `.last` 盲选**。
 """
         log.info("[最终编排Agent] 为 %s 条用例生成测试方法", len(cases))
         return self.run(prompt, stream=stream)

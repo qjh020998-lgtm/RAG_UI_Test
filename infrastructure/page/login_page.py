@@ -5,7 +5,7 @@ import re
 from playwright.sync_api import expect
 
 from data_loader import load_config
-from pw_core.base_page import BasePage
+from infrastructure.pw_core.base_page import BasePage
 
 
 class LoginPage(BasePage):

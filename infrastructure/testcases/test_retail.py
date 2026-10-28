@@ -8,7 +8,7 @@
 import allure
 import pytest
 
-from page.retail_page import RetailPage
+from infrastructure.page import RetailPage
 
 
 @allure.feature("零售管理")

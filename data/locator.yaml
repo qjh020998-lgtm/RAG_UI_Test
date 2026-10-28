@@ -2,6 +2,9 @@ base_page:
   MODAL:
     value: .ant-modal:visible
     type: css
+  LINK_ICON:
+    value: i.anticon-search, .ant-input-suffix .anticon-search
+    type: css
   FORM_ERROR:
     value: .ant-form-explain, .ant-form-item-explain
     type: css

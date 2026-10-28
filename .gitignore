@@ -28,3 +28,6 @@ cache/
 
 # Knowledge store exports
 knowledge-store/
+/learning/
+/docs/
+/config.yaml

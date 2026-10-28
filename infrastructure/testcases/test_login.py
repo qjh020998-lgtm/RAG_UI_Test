@@ -3,7 +3,7 @@
 import pytest
 
 from data_loader import load_login_cases
-from page.login_page import LoginPage
+from infrastructure.page.login_page import LoginPage
 
 # 测试数据来自 data/login_cases.yaml，模块加载时完成校验
 LOGIN_CASES = load_login_cases()

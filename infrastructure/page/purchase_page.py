@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import date
 from typing import Iterable
 
 import allure
 from playwright.sync_api import Locator, expect
 
 from data_loader import load_config
-from pw_core.base_page import BasePage
+from infrastructure.pw_core.base_page import BasePage
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -252,6 +251,20 @@ class PurchasePage(BasePage):
         log.info("activating 读取商品库存")
         return self.last_product_stock
 
+    @allure.step("读取商品实时库存：{product}")
+    def read_product_stock(self, product: str) -> str:
+        """打开新增弹窗 → （仅入库/退货）选仓库 → 选商品 → 读库存 → 关弹窗。"""
+        self.open_add_modal()
+        # 请购单没有仓库字段；只有入库/退货才需要先选仓库
+        if "/bill/purchase_apply" not in self.page.url:
+            self.select_warehouse()
+        self.open_product_selector(0)
+        self.choose_product(product, mode="check")
+        stock = self.last_product_stock
+        self.close_modal()
+        self.close_modal()
+        return stock
+
     @allure.step("填写本次退款/付款金额")
     def fill_change_amount(self, value: str | int) -> None:
         log.info("activating 填写本次退款/付款金额")
@@ -293,6 +306,9 @@ class PurchasePage(BasePage):
     @allure.step("选择仓库")
     def select_warehouse(self, name: str | None = None, row_index: int = 0) -> None:
         log.info("activating 选择仓库")
+        if "/bill/purchase_apply" in self.page.url:
+            log.info("activating 选择仓库 跳过：请购单没有仓库字段")
+            return
         log.info(f"activating 选择仓库 {name or '第一个可用仓库'} row={row_index}")
         modal = self.get_modal()
         # 订单页没有仓库字段；入库/退货的仓库在明细行
@@ -381,8 +397,8 @@ class PurchasePage(BasePage):
         assert clicked, "付款单未找到选择单据按钮"
         self.page.wait_for_timeout(1000)
 
-        selector = self.page.locator(".ant-modal:visible").last
-        search = selector.locator("input[placeholder*='单据编号查询']:visible").first
+        selector = self.get_link_modal()
+        search = selector.locator("input[placeholder*='单据编号']:visible").first
         search.fill(number)
         assert self._click_visible_text_button(selector, "查"), "付款单选择弹窗未找到查询按钮"
         self.page.wait_for_timeout(900)
@@ -567,3 +583,204 @@ class PurchasePage(BasePage):
         except Exception:
             pass
 
+    # 已存在: click_insert_row <- 点击插入行
+    # 已存在: select_editable_row <- 点击所在行复选框
+    # 已存在: click_remove_row <- 弹出移除行按钮
+    # 已存在: open_product_selector <- 点击选中行的搜索按钮
+    @allure.step("输入商品关键词并查询")
+    def fill_product_search_keyword(self, keyword: str):
+        product = self.page.locator(".ant-modal:visible").filter(has_text="选择商品").last
+        assert product.count(), "未打开商品选择弹窗"
+        search = product.locator(
+            "input[placeholder*='条码']:visible, input[placeholder*='名称']:visible, "
+            "input[placeholder*='关键词']:visible"
+        ).first
+        assert search.count(), "商品选择弹窗未找到关键词输入框"
+        search.fill(keyword)
+        assert self._click_visible_text_button(product, "查"), "商品选择弹窗未找到查询按钮"
+        self.page.wait_for_timeout(800)
+    @allure.step("双击第一行商品查询记录")
+    def double_click_first_product_row(self):
+        product = self.page.locator(".ant-modal:visible").filter(has_text="选择商品").last
+        row = product.locator(".ant-table-tbody tr.ant-table-row:visible").first
+        row.locator("td").nth(1).dblclick()
+    # 已存在: open_product_selector <- 点击选中行的搜索按钮
+    @allure.step("选中第一行商品")
+    def select_first_product_row(self):
+        product = self.page.locator(".ant-modal:visible").filter(has_text="选择商品").last
+        row = product.locator(".ant-table-tbody tr.ant-table-row:visible").first
+        checkbox = row.locator("input[type=checkbox], input[type=radio]")
+        if checkbox.count():
+            checkbox.first.check()
+        else:
+            row.locator("td").nth(1).click()
+    # 已存在: confirm_popup <- 点击确定
+    # 已存在: fill_editable_quantity <- 输入数量1
+    # 已存在: get_form_number <- 获取单据信息
+    # 已存在: fill_editable_quantity <- 输入数量0
+    # 已存在: get_form_number <- 获取单据信息
+    # 已存在: fill_editable_quantity <- 输入数量为负数
+    # 已存在: open_purchase_apply <- 新增请购单并点击商品搜索
+    # 已存在: open_add_modal <- 新增请购单并点击商品搜索
+    # 已存在: open_product_selector <- 新增请购单并点击商品搜索
+    # 已存在: choose_product <- 选择商品“西瓜1号”
+    # 已存在: fill_editable_quantity <- 数量填 N
+    # 已存在: open_product_selector <- 点击商品搜索
+    # 已存在: choose_product <- 选择商品“西瓜1号”
+    # 已存在: fill_editable_quantity <- 数量填 N+1
+    @allure.step("勾选列表单据复选框")
+    def select_list_row_checkbox(self, number: str):
+        self.get_list_row(number).get_by_role('checkbox').click()
+    # 已存在: open_purchase_order <- 进入采购订单界面
+    @allure.step("打开关联单据搜索")
+    def click_requisition_link_search_button(self) -> Locator:
+        # 采购订单/采购入库/采购退货 共用；label 由页面实际文案决定
+        return self.open_link_search("关联")
+
+    @allure.step("输入关联单据编号并查询")
+    def search_requisition_link(self, number: str) -> None:
+        link_modal = self.get_link_modal()
+        search = link_modal.locator("input[placeholder*='单据编号']:visible").first
+        search.fill(number)
+        assert self._click_visible_text_button(link_modal, "查"), "关联弹窗未找到查询按钮"
+    # 已存在: click_insert_row <- 点击插入行
+    # 已存在: select_editable_row <- 点击所在行复选框
+    # 已存在: click_remove_row <- 弹出移除行按钮
+    # 已存在: confirm_popup <- 点击确定
+    # 已存在: confirm_popup <- 点击确定
+    # 已存在: confirm_popup <- 点击确定
+    # 已存在: open_purchase_order <- 进入“采购管理 > 采购订单”，点击“新增”
+    # 已存在: open_add_modal <- 进入“采购管理 > 采购订单”，点击“新增”
+    # 已存在: open_product_selector <- 在商品明细行点击搜索按钮，选择“西瓜2号”，输入数量 1、单价 0.5
+    # 已存在: choose_product <- 在商品明细行点击搜索按钮，选择“西瓜2号”，输入数量 1、单价 0.5
+    # 已存在: fill_editable_quantity <- 在商品明细行点击搜索按钮，选择“西瓜2号”，输入数量 1、单价 0.5
+    # 已存在: fill_editable_price <- 在商品明细行点击搜索按钮，选择“西瓜2号”，输入数量 1、单价 0.5
+    # 已存在: open_add_modal <- 采购订单页面点击“新增”
+    # 已存在: link_bill <- 点击“关联请购单”，输入请购单号并查询
+    @allure.step("勾选关联请购单第一行")
+    def select_first_link_row_checkbox(self):
+        link_modal = self.get_link_modal()
+        row = link_modal.locator(".ant-table-tbody tr.ant-table-row:visible").first
+        checkbox = row.locator("input[type=checkbox]")
+        if checkbox.count():
+            checkbox.first.check()
+        else:
+            row.locator("td").nth(1).click()
+    # 已存在: confirm_popup <- 勾选请购单，点击“确定”加载明细
+    # 已存在: open_add_modal <- 采购订单新增，点击“关联请购单”
+    # 已存在: link_bill <- 采购订单新增，点击“关联请购单”
+    # 已存在: link_bill <- 输入未审核请购单号，点击“查询”
+    # 已存在: audit <- 勾选未审核订单，点击“审核”，在确认框点击“确定”
+    # 已存在: confirm_popup <- 勾选未审核订单，点击“审核”，在确认框点击“确定”
+    # 已存在: unaudit <- 勾选已审核订单，点击“反审核”，确认
+    # 已存在: confirm_popup <- 勾选已审核订单，点击“反审核”，确认
+    # 已存在: click_row_action <- 在列表点击该单据“编辑”
+    # 已存在: delete_bill <- 在列表点击该单据“删除”
+    # 已存在: transfer_to_inbound <- 由该订单点击“转采购入库”
+    # 已存在: open_purchase_in <- 进入“采购管理 > 采购入库”，点击“新增”
+    # 已存在: open_add_modal <- 进入“采购管理 > 采购入库”，点击“新增”
+    # 已存在: choose_product <- 添加商品“西瓜2号”，数量 1、单价 0.5
+    # 已存在: fill_editable_quantity <- 添加商品“西瓜2号”，数量 1、单价 0.5
+    # 已存在: fill_editable_price <- 添加商品“西瓜2号”，数量 1、单价 0.5
+    # 已存在: read_product_stock <- 在商品列表或库存查询中记录“西瓜2号”当前库存
+    # 已存在: audit <- 勾选采购入库单，点击“审核”并确认
+    # 已存在: confirm_popup <- 勾选采购入库单，点击“审核”并确认
+    # 已存在: get_status <- 查看单据状态和商品库存
+    # 已存在: read_product_stock <- 查看单据状态和商品库存
+    @allure.step("点击多账户明细")
+    def click_multi_account_detail(self):
+        self.page.get_by_text('多账户明细').first.click()
+    # 已存在: open_payment_list <- 进入“财务管理 > 付款单”，点击“新增”
+    # 已存在: open_add_modal <- 进入“财务管理 > 付款单”，点击“新增”
+    # 已存在: choose_payment_bill <- 选择该采购入库单
+    @allure.step("点击扫码录入")
+    def click_scan_input(self):
+        self.page.get_by_role('button', name='扫码录入').click()
+    @allure.step("输入商品条码并回车")
+    def fill_scan_barcode_and_enter(self, barcode: str):
+        # 明细行“输入条码或名称”是 textbox，不是 combobox
+        row = self.get_editable_rows().first
+        input_locator = row.locator(
+            "input[placeholder*='条码'], input[placeholder*='名称']"
+        ).first
+        input_locator.fill(barcode)
+        input_locator.press("Enter")
+    # 已存在: open_purchase_back <- 进入“采购管理 > 采购退货”，点击“新增”
+    # 已存在: open_add_modal <- 进入“采购管理 > 采购退货”，点击“新增”
+    # 已存在: link_bill <- 点击“关联单据”，选择采购入库单
+    # 已存在: select_editable_row <- 勾选明细，填写退货数量 1
+    # 已存在: fill_editable_quantity <- 勾选明细，填写退货数量 1
+    # 已存在: open_add_modal <- 采购退货页面点击“新增”
+    # 已存在: transfer_to_return <- 由该入库单转采购退货
+    # 已存在: fill_editable_quantity <- 将退货数量改为 2
+    # 已存在: read_product_stock <- 记录“西瓜2号”当前库存
+    # 已存在: audit <- 勾选采购退货单，点击“审核”并确认
+    # 已存在: confirm_popup <- 勾选采购退货单，点击“审核”并确认
+    # 已存在: get_status <- 查看单据状态和商品库存
+    # 已存在: read_product_stock <- 查看单据状态和商品库存
+    # 已存在: click_row_action <- 点击该单据“编辑”
+    # 已存在: click_row_action <- 点击该单据“删除”
+    # 已存在: fill_change_amount <- 在“本次退款”输入 60
+    # 需补充控件: 本次欠款
+    # 已存在: open_add_modal <- 点击“新增”，查看单据编号
+    # 已存在: get_form_number <- 点击“新增”，查看单据编号
+    # 已存在: close_modal <- 返回列表再次点击“新增”，查看新编号
+    # 已存在: open_add_modal <- 返回列表再次点击“新增”，查看新编号
+    # 已存在: get_form_number <- 返回列表再次点击“新增”，查看新编号
+    # 已存在: reset_search <- 点击“重置”
+    # 需补充控件: 附件
+    @allure.step("上传附件文件")
+    def upload_attachment_files(self, files: str):
+        with self.page.expect_file_chooser() as file_chooser:
+            self.page.get_by_role('button', name='图标: upload 点击上传').click()
+        file_chooser.value.set_files(files.split(','))
+    @allure.step("点击导出按钮")
+    def click_export_button(self):
+        self.page.get_by_text('导出').first.click()
+    # 已存在: confirm_popup <- 在列表点击“导出”，确认导出
+
+    # 已存在: assert_empty_state <- _assert_link_search_empty
+
+    @allure.step("确保明细表至少两行")
+    def _ensure_two_rows(self):
+        attempts = 0
+        while int(self.get_editable_row_count()) < 2 and attempts < 5:
+            self.click_insert_row()
+            self.page.wait_for_timeout(300)
+            attempts += 1
+
+    @allure.step("读取第一条明细行文本")
+    def _first_detail_text(self):
+        rows = self.get_editable_rows()
+        if hasattr(rows, "count"):
+            if rows.count() == 0:
+                return ""
+            return rows.first.inner_text().strip()
+        if isinstance(rows, list):
+            if not rows:
+                return ""
+            first = rows[0]
+            if hasattr(first, "inner_text"):
+                return first.inner_text().strip()
+            return str(first).strip()
+        return ""
+
+    @allure.step("关联请购单到订单：{number}")
+    def _link_requisition_to_order(self, number):
+        modal = self.get_modal()
+        modal.get_by_role("textbox", name="关联请购单:").fill(number)
+        modal.get_by_role("button", name="图标: search").first.click()
+        self.page.wait_for_timeout(500)
+        self.select_first_link_row_checkbox()
+
+    @allure.step("判断页面提示包含：{text}")
+    def _message_contains(self, text):
+        messages = self.get_messages()
+        if not messages:
+            return False
+        if isinstance(messages, (list, tuple)):
+            return any(text in message for message in messages)
+        return text in messages
+
+    # 已存在: get_last_product_stock <- _stock_value
+    # 需补充控件: 跳过

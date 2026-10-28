@@ -126,7 +126,7 @@ RAG_UI_Test/
 import pytest
 
 from data_loader import load_login_cases
-from page.login_page import LoginPage
+from infrastructure.page.login_page import LoginPage
 
 LOGIN_CASES = load_login_cases()
 
@@ -156,6 +156,15 @@ class TestLogin:
 - 避免 CSS/XPath（如 `#submit`、`div.form`）——即使当前登录页因为历史原因用了 `#loginName` 这类 id，新增页面不要效仿。
 - 元素用 `@property` 懒加载；业务操作封装成方法；断言方法以 `assert_` 开头。
 - 新增页面：`page/<name>_page.py` 继承 `BasePage`，并在 `page/__init__.py` 导出。
+- **关联单据统一用 `BasePage.open_link_search(label_keyword="关联")` + `get_link_modal()`**。
+  采购订单 label 是“关联请购单”、采购入库是“关联订单”、采购退货是“关联单据”，但 DOM 同构：
+  readonly input + `span.ant-input-suffix > i.anticon-search`；搜索图标不是 button，不能 fill 输入框。
+- **A11y 缓存里的 `button "图标: search"` 不是 Playwright button**：实际是
+  `<i class="anticon-search">`，必须用 `i.anticon-xxx`；禁止生成
+  `get_by_role('button', name='图标: ...')`。
+- 商品选择弹窗的关键词输入是 textbox（placeholder 含“条码/名称/关键词”），不是 combobox；
+  统一用 `fill_product_search_keyword()`（内部填词 + 点查询）。
+- 请购单没有仓库字段：`select_warehouse()` 在 `/bill/purchase_apply` 直接跳过，只有采购入库/退货才选仓库。
 
 ### 4.4 配置
 

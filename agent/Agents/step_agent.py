@@ -80,7 +80,16 @@ class StepAgent(BaseAgent):
 7. **如果步骤需要的控件既不在「可用控件」清单、也没有可复用 locator，输出一行
    `# 需补充控件: <控件名>`，不要自己编 locator**；
 8. 不要调用未注册的辅助方法（例如 self._first_visible）；
-9. 每个方法只做一件事，参数用字符串/整数。
+9. 每个方法只做一件事，参数用字符串/整数；
+10. **控件缓存里 `role=icon`（`图标: xxx`）的不是 button，必须用 `i.anticon-xxx`，禁止写
+    `get_by_role('button', name='图标: ...')`**；
+11. **关联单据统一调 `open_link_search(label_keyword)` / `link_bill(...)`**；
+    采购订单=关联请购单、采购入库=关联订单、采购退货=关联单据，不要把 label 写死成一个模块；
+    只读关联输入框不能 fill，要点右侧放大镜；
+12. **商品选择弹窗的关键词输入按 placeholder（条码/名称/关键词）定位，禁止用 combobox role**；
+13. **请购单没有仓库字段**：`read_product_stock` 只在 `/bill/purchase_in`、`/bill/purchase_back`
+    先 `select_warehouse()`；
+14. 方法必须以 return/assert/动作收尾，禁止 `x = self.page.get` 这类半截代码；同批不得重名。
 """
         log.info("[步骤生成Agent] 生成 %s 个步骤的方法", len(steps))
         return self.run(prompt, stream=stream)

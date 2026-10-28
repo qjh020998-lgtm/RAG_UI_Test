@@ -25,6 +25,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 from agent.Agents.Base_Agent import PROJECT_ROOT, AgentSettings, log
@@ -40,6 +42,40 @@ from agent.tools.page_utils import (
 from agent.tools.code_validator import missing_methods, validate
 from agent.tools.step_registry import load_registry, register_locators, write_registry
 from data_loader import load_yaml
+
+# ---------------------------------------------------------------------------
+# 生成副本管理
+# ---------------------------------------------------------------------------
+
+GEN_RUNS_DIR = PROJECT_ROOT / "cache" / "gen_runs"
+
+
+def _create_run_dir(sheet: str, label: str = "") -> Path:
+    """在 `cache/gen_runs/` 下创建带时间戳的副本目录。
+
+    目录命名：`<sheet>_<YYYYMMDD_HHMMSS>` 或 `<label>`（自定义）。
+    返回目录路径。
+    """
+    GEN_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    if label:
+        run_name = label
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"{sheet}_{timestamp}"
+    run_dir = GEN_RUNS_DIR / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def _copy_to_run_dir(run_dir: Path, src: Path, suffix: str = "") -> Path:
+    """把原文件复制到 run_dir，返回副本路径。`suffix` 插入文件名末尾。"""
+    if not src.exists():
+        raise FileNotFoundError(f"源文件不存在：{src}")
+    dst_name = src.stem + suffix + src.suffix
+    dst = run_dir / dst_name
+    shutil.copy2(src, dst)
+    return dst
+
 
 # sheet -> page 类 / 测试文件 / fixture
 SHEET_CONFIG: dict[str, dict] = {
@@ -78,6 +114,11 @@ def _extract_missing_controls(code: str) -> list[str]:
     return re.findall(r"#\s*需补充控件[:：]\s*(.+)", code)
 
 
+def _existing_case_ids(test_code: str) -> set[str]:
+    """从已有测试文件提取 ``@allure.story("采购-001 ...")`` 的 case id。"""
+    return set(re.findall(r"@allure\.story\(\s*['\"]([^'\"]+)", test_code))
+
+
 def _refresh(page_key: str):
     """写完 page 文件后刷新 step.yaml，返回最新注册表。"""
     write_registry()
@@ -93,6 +134,9 @@ def run(
     apply: bool = False,
     limit: int = 0,
     stream: bool | None = None,
+    label: str = "",
+    test_file: str = "",
+    force: bool = False,
 ) -> dict:
     """执行一次生成编排。
 
@@ -111,12 +155,61 @@ def run(
             f"请人工先生成 {config['page_class']} 与该 sheet 的 xlsx 映射。"
         )
 
+    # 生成副本：apply 模式下写入副本，不污染原文件
+    run_dir: Path | None = None
+    page_copy_path: Path | None = None
+    test_copy_path: Path | None = None
+    if apply:
+        run_dir = _create_run_dir(sheet, label=label)
+        page_copy_path = _copy_to_run_dir(run_dir, page_path)
+        test_src = PROJECT_ROOT / config["test_file"]
+        if test_src.exists():
+            test_copy_path = _copy_to_run_dir(run_dir, test_src)
+        log.info("[副本] 生成副本目录：%s", run_dir)
+        log.info("[副本] page 副本：%s", page_copy_path)
+        if test_copy_path:
+            log.info("[副本] test 副本：%s", test_copy_path)
+        # 后续写入指向副本
+        page_path = page_copy_path
+
     cases = load_pending_cases(xlsx, sheet)
     if limit:
         cases = cases[:limit]
     log.info("sheet=%s 待执行用例：%s 条", sheet, len(cases))
     if not cases:
         return {"sheet": sheet, "cases": 0, "missing_steps": 0, "page_written": False, "test_written": False}
+
+    # 已有测试按 case id 去重：同一个 Excel 用例只生成一次，避免多批 append 成 87 条
+    test_path_original = PROJECT_ROOT / config["test_file"]
+    existing = (
+        test_path_original.read_text(encoding="utf-8")
+        if test_path_original.exists()
+        else ""
+    )
+    if not force:
+        stories = _existing_case_ids(existing)
+        kept = [
+            case
+            for case in cases
+            if not any(story.startswith(str(case["id"])) for story in stories)
+        ]
+        if len(kept) != len(cases):
+            log.info(
+                "[去重] 已有测试覆盖 %s 条用例，本轮跳过，仅生成 %s 条",
+                len(cases) - len(kept),
+                len(kept),
+            )
+        cases = kept
+    if not cases:
+        log.info("[去重] 本轮用例均已有测试，未生成新代码")
+        return {
+            "sheet": sheet,
+            "cases": 0,
+            "missing_steps": 0,
+            "page_written": False,
+            "test_written": False,
+            "skipped_existing": True,
+        }
 
     # 读注册表，不再把整份 page 源码塞进 prompt
     steps_registry, locators_registry = load_registry()
@@ -206,8 +299,7 @@ def run(
         else:
             log.info("[dry-run] StepAgent 输出预览：\n%s", code[:1000])
 
-    test_path = PROJECT_ROOT / config["test_file"]
-    existing = test_path.read_text(encoding="utf-8") if test_path.exists() else ""
+    test_path = test_copy_path if (apply and test_copy_path) else test_path_original
     test_code = FinalAgent().generate_tests(
         sheet=sheet,
         page_class=config["page_class"],
@@ -216,13 +308,22 @@ def run(
         registered_fixtures=steps_registry.get("fixtures", {}),
         registered_controls=locators_registry.get("controls", {}),
         purchase_data=load_yaml("purchase.yaml"),
+        enums=steps_registry.get("enums", {}),
         existing_tests=existing[-4000:],
         fixture=config["fixture"],
         stream=stream,
     )
 
     # 校验：FinalAgent 调用了注册表里没有的方法 -> 回头让 StepAgent 补 -> 重新生成
-    errors = validate(test_code, set(registered_steps), registered_steps)
+    errors = validate(
+                test_code,
+                set(registered_steps),
+                registered_steps,
+                data_keys=set(load_yaml("purchase.yaml").keys()),
+                fixtures=steps_registry.get("fixtures", {}),
+                existing_code=existing,
+                case_ids=[case["id"] for case in cases],
+            )
     if errors:
         log.warning("[校验] FinalAgent 输出有问题：%s", errors)
         missing = missing_methods(test_code, set(registered_steps))
@@ -241,6 +342,7 @@ def run(
             registered_steps, registered_locators, steps_registry, locators_registry = _refresh(
                 page_key
             )
+            # 重新生成测试代码，传入错误信息让 FinalAgent 修复
             test_code = FinalAgent().generate_tests(
                 sheet=sheet,
                 page_class=config["page_class"],
@@ -252,14 +354,54 @@ def run(
                 existing_tests=existing[-4000:],
                 fixture=config["fixture"],
                 stream=stream,
+                previous_code=test_code,
+                previous_errors=errors,
             )
-            errors = validate(test_code, set(registered_steps), registered_steps)
+            errors = validate(
+                test_code,
+                set(registered_steps),
+                registered_steps,
+                data_keys=set(load_yaml("purchase.yaml").keys()),
+                fixtures=steps_registry.get("fixtures", {}),
+                existing_code=existing,
+                case_ids=[case["id"] for case in cases],
+            )
             log.info("[校验] 补齐后：%s", errors or "通过")
+        elif apply and errors:
+            # 没有缺失方法，但有其他错误（如数据引用、断言格式），让 FinalAgent 修复
+            log.info("[校验] 调用 FinalAgent 修复 %s 个错误", len(errors))
+            test_code = FinalAgent().generate_tests(
+                sheet=sheet,
+                page_class=config["page_class"],
+                cases=cases,
+                registered_steps=registered_steps,
+                registered_fixtures=steps_registry.get("fixtures", {}),
+                registered_controls=locators_registry.get("controls", {}),
+                purchase_data=load_yaml("purchase.yaml"),
+                existing_tests=existing[-4000:],
+                fixture=config["fixture"],
+                stream=stream,
+                previous_code=test_code,
+                previous_errors=errors,
+            )
+            errors = validate(
+                test_code,
+                set(registered_steps),
+                registered_steps,
+                data_keys=set(load_yaml("purchase.yaml").keys()),
+                fixtures=steps_registry.get("fixtures", {}),
+                existing_code=existing,
+                case_ids=[case["id"] for case in cases],
+            )
+            log.info("[校验] 修复后：%s", errors or "通过")
         elif missing:
             log.info("[dry-run] 缺失 step：%s", missing)
-    if apply:
+    if apply and not errors:
         append_code(test_path, test_code)
         test_written = True
+    elif errors:
+        log.error("[校验] 仍有错误，拒绝写入 %s：%s", test_path, errors)
+        test_written = False
     else:
         test_written = False
         if stream_enabled:
@@ -267,13 +409,19 @@ def run(
         else:
             log.info("[dry-run] FinalAgent 输出预览：\n%s", test_code[:1000])
 
-    return {
+    result = {
         "sheet": sheet,
         "cases": len(cases),
         "missing_steps": sum(len(missing) for _, missing in missing_by_case),
         "page_written": page_written,
         "test_written": test_written,
+        "errors": errors,
     }
+    if run_dir:
+        result["run_dir"] = str(run_dir)
+        result["page_copy"] = str(page_path)
+        result["test_copy"] = str(test_path)
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -287,6 +435,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="关闭流式输出，等待 Agent 完整返回后再打印",
     )
+    parser.add_argument(
+        "--label",
+        default="",
+        help="自定义副本目录名（默认按 sheet_时间戳命名）",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="忽略已有 case id 去重（默认同一用例不重复生成）",
+    )
     args = parser.parse_args(argv)
 
     result = run(
@@ -295,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
         apply=args.apply,
         limit=args.limit,
         stream=not args.no_stream,
+        label=args.label,
+        force=args.force,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

@@ -9,7 +9,7 @@ from __future__ import annotations
 import allure
 from playwright.sync_api import Locator
 
-from pw_core.base_page import BasePage
+from infrastructure.pw_core.base_page import BasePage
 from utils.logger import get_logger
 
 log = get_logger(__name__)

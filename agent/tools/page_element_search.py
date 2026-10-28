@@ -98,7 +98,14 @@ def _open_and_snapshot(url: str, state: str, storage_state: str = "") -> str:
         context = browser.new_context(storage_state=storage_state or None)
         page = context.new_page()
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            for attempt in range(2):
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    break
+                except Exception:
+                    if attempt == 1:
+                        raise
+                    page.wait_for_timeout(2000)
             # ERP 是 SPA 且有轮询请求，networkidle 可能永远不触发；
             # 等关键容器 + 短暂停留，让表格/弹窗完成渲染
             page.wait_for_selector(".ant-layout, #app", timeout=15000)
@@ -106,12 +113,17 @@ def _open_and_snapshot(url: str, state: str, storage_state: str = "") -> str:
 
             target = page.locator("body")
             if state in MODAL_STATES:
+                # 新手引导遮罩会拦截“新增”点击，先移除
+                page.evaluate(
+                    "() => document.querySelectorAll('.introjs-overlay,.introjs-tooltip,"
+                    ".introjs-helperLayer,.introjs-disableInteraction').forEach(n => n.remove())"
+                )
                 trigger = page.get_by_role("button", name="新增").first
                 trigger.click()
                 page.wait_for_selector(".ant-modal", state="visible", timeout=10000)
                 page.wait_for_timeout(800)
-                # 弹窗控件必须和列表页分开：只抓弹窗容器
-                target = page.locator(".ant-modal:visible").first
+                # 新增表单可能是整页，也可能是弹窗；直接抓整个页面，避免漏控件
+                target = page.locator("body")
 
             # Playwright 1.49+ 用 aria_snapshot；旧版退回 accessibility
             if hasattr(target, "aria_snapshot"):
@@ -138,6 +150,24 @@ def _clean_name(name: str) -> str:
     return cleaned
 
 
+_ICON_ONLY = re.compile(r"^图标:\s*([a-z0-9-]+)$")
+
+
+def _icon_control(raw_name: str) -> dict | None:
+    """A11y 把 Ant Design 图标报成 button，但 DOM 里是 <i>，role 定位必然失败。"""
+    match = _ICON_ONLY.match((raw_name or "").strip())
+    if not match:
+        return None
+    icon = match.group(1)
+    return {
+        "name": icon,
+        "raw_name": raw_name,
+        "role": "icon",
+        "locator": f"i.anticon-{icon}",
+        "source": "a11y-icon",
+    }
+
+
 def _parse_aria(snapshot: str) -> list[dict]:
     """把 aria snapshot（YAML 或 JSON）转成控件列表。
 
@@ -158,6 +188,10 @@ def _parse_aria(snapshot: str) -> list[dict]:
             continue
         role = match.group(1)
         raw_name = match.group(2).strip().strip('"').strip("'")
+        icon = _icon_control(raw_name) if role == "button" else None
+        if icon:
+            controls.append(icon)
+            continue
         clean = _clean_name(raw_name)
         if not clean or clean in {"body", "document"}:
             continue
@@ -186,6 +220,13 @@ def _parse_aria(snapshot: str) -> list[dict]:
     def walk(node: dict) -> None:
         role = node.get("role", "")
         raw_name = (node.get("name") or "").strip()
+        icon = _icon_control(raw_name) if role == "button" else None
+        if icon:
+            controls.append(icon)
+            for child in node.get("children", []) or []:
+                if isinstance(child, dict):
+                    walk(child)
+            return
         clean = _clean_name(raw_name)
         if role and clean and role not in {"WebArea", "RootWebArea"}:
             if role not in SKIP_ROLES and len(clean) <= MAX_NAME_LENGTH:
@@ -351,6 +392,16 @@ def search_page_elements(
             return {**cached, "cached": True}
 
     a11y = _fetch_a11y(url, state, storage_state) if use_browser else []
+    if state in MODAL_STATES and use_browser and not a11y:
+        # 抓 A11y 失败时不要用 JS 字符串覆盖已有缓存，否则会丢掉 role/locator
+        return {
+            "module": module,
+            "page": page,
+            "state": state,
+            "url": url,
+            "controls": [],
+            "error": "A11y 抓取失败，保留旧缓存",
+        }
     js_strings, bundle_hash = _fetch_js_strings(page)
     js_names = _filter_strings(js_strings)
     controls = _merge(a11y, js_names)

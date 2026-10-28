@@ -77,7 +77,11 @@ DISCOVERY_PROMPT = """你是 ERP UI 自动化测试的「控件获取 Agent」�
 2. **不重复抓**：命中缓存直接返回，只有需要重抓时才 `refresh=True`；
 3. **不遗漏状态**：`list` 和 `create_modal` 都要抓；有编辑弹窗时额外加 `edit_modal`；
 4. **失败要报**：任何页面抓不到控件，记录 `{page, state, error}`，继续下一个，不要中断整体；
-5. **速度优先**：8 组（4 页面 × 2 状态）应在 4 分钟内完成，单组超过 60 秒要告警。
+5. **速度优先**：8 组（4 页面 × 2 状态）应在 4 分钟内完成，单组超过 60 秒要告警；
+6. **icon 不是 button**：A11y 里的 `button "图标: search"` 实际是 `<i class="anticon-search">`，
+   缓存必须写成 `role=icon, locator=i.anticon-search`，禁止写 `get_by_role('button', name='图标: ...')`；
+7. **关联单据字段**：readonly input（采购订单“关联请购单”/采购入库“关联订单”/采购退货“关联单据”）
+   的操作入口是右侧 `i.anticon-search`，不是输入框本身；缓存要保留 label + 图标。
 
 ## 输出格式
 ```json

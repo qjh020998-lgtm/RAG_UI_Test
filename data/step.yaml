@@ -98,6 +98,8 @@ base_page:
     kind: step
     scope: create_modal
     module: common
+    requires:
+    - open_product_selector
   open_product_selector:
     step: 打开商品选择弹窗
     args:
@@ -194,6 +196,23 @@ base_page:
     scope: list
     module: common
     stale: false
+  get_link_modal:
+    step: 获取关联单据弹窗
+    args: []
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+  open_link_search:
+    step: 打开关联单据搜索：{label_keyword}
+    args:
+    - label_keyword
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+    side_effect:
+    - opens_modal
   link_bill:
     step: 关联单据：{number}
     args:
@@ -202,7 +221,7 @@ base_page:
     - bill_mode
     returns: None
     kind: step
-    scope: list
+    scope: create_modal
     module: common
   open_add_modal:
     step: 打开新增弹窗
@@ -399,6 +418,20 @@ purchase_page:
     requires:
     - open_add_modal
     - open_product_selector
+    cleanup:
+    - close_modal
+  read_product_stock:
+    step: 读取商品实时库存：{product}
+    args:
+    - product
+    returns: str
+    kind: step
+    scope: list
+    module: common
+    stale: false
+    side_effect:
+    - opens_modal
+    - closes_modal
   fill_change_amount:
     step: 填写本次退款/付款金额
     args:
@@ -566,6 +599,131 @@ purchase_page:
     side_effect:
     - navigates
     - deletes_bill
+  fill_product_search_keyword:
+    step: 输入商品关键词并查询
+    args:
+    - keyword
+    returns: ''
+    kind: step
+    scope: create_modal
+    module: common
+  double_click_first_product_row:
+    step: 双击第一行商品查询记录
+    args: []
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+    requires:
+    - open_product_selector
+  select_first_product_row:
+    step: 选中第一行商品
+    args: []
+    returns: ''
+    kind: step
+    scope: create_modal
+    module: common
+    requires:
+    - open_product_selector
+  select_list_row_checkbox:
+    step: 勾选列表单据复选框
+    args:
+    - number
+    returns: ''
+    kind: step
+    scope: create_modal
+    module: common
+  click_requisition_link_search_button:
+    step: 打开关联单据搜索
+    args: []
+    returns: Locator
+    kind: step
+    scope: create_modal
+    module: common
+    side_effect:
+    - opens_modal
+  search_requisition_link:
+    step: 输入关联单据编号并查询
+    args:
+    - number
+    returns: None
+    kind: step
+    scope: create_modal
+    module: common
+  select_first_link_row_checkbox:
+    step: 勾选关联请购单第一行
+    args: []
+    returns: ''
+    kind: step
+    scope: create_modal
+    module: common
+  click_multi_account_detail:
+    step: 点击多账户明细
+    args: []
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  click_scan_input:
+    step: 点击扫码录入
+    args: []
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  fill_scan_barcode_and_enter:
+    step: 输入商品条码并回车
+    args:
+    - barcode
+    returns: ''
+    kind: step
+    scope: create_modal
+    module: common
+  upload_attachment_files:
+    step: 上传附件文件
+    args:
+    - files
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  click_export_button:
+    step: 点击导出按钮
+    args: []
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  _ensure_two_rows:
+    step: 确保明细表至少两行
+    args: []
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  _first_detail_text:
+    step: 读取第一条明细行文本
+    args: []
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  _link_requisition_to_order:
+    step: 关联请购单到订单：{number}
+    args:
+    - number
+    returns: ''
+    kind: step
+    scope: list
+    module: common
+  _message_contains:
+    step: 判断页面提示包含：{text}
+    args:
+    - text
+    returns: ''
+    kind: step
+    scope: list
+    module: common
 retail_page:
   open_retail_out:
     step: 打开零售出库列表
@@ -773,3 +931,23 @@ fixtures:
     kind: setup
     scope: function
     returns: RetailPage
+enums:
+  status_tags:
+  - 草稿
+  - 未审核
+  - 已审核
+  - 审核中
+  - 部分采购
+  - 部分入库
+  - 部分出库
+  - 部分退货
+  - 已入库
+  - 已出库
+  - 已退货
+  - 完成入库
+  - 完成出库
+  - 完成退货
+  - 已付款
+  - 未付款
+  - 部分付款
+  - 已作废

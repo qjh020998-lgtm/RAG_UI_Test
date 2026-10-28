@@ -6,13 +6,13 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from data_loader import load_config, load_login_cases, load_yaml
-from page.login_page import LoginPage
-from page.purchase_page import PurchasePage
-from page.retail_page import RetailPage
-from pw_core.base_page import BasePage
-from pw_core.driver.browser_session import BrowserSession
-from pw_core.driver.context_driver import ContextDriver
-from pw_core.driver.driver_manager import DriverManager
+from infrastructure.page.login_page import LoginPage
+from infrastructure.page import PurchasePage
+from infrastructure.page import RetailPage
+from infrastructure.pw_core.base_page import BasePage
+from infrastructure.pw_core.driver.browser_session import BrowserSession
+from infrastructure.pw_core.driver.context_driver import ContextDriver
+from infrastructure.pw_core.driver.driver_manager import DriverManager
 from utils.logger import get_logger
 from dotenv import load_dotenv
 load_dotenv()

@@ -10,7 +10,7 @@ from typing import Any
 
 from playwright.sync_api import Page
 
-from pw_core.base_page import BasePage
+from infrastructure.pw_core.base_page import BasePage
 
 
 class BasePageContract:

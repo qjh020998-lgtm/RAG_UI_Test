@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import allure
 from playwright.sync_api import Page, Locator, expect
 from data_loader import load_config
-from pw_core.driver.driver_manager import DriverManager
+from infrastructure.pw_core.driver.driver_manager import DriverManager
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -20,6 +20,8 @@ class BasePage:
 
     # Ant Design 弹窗容器（采购/零售等单据页通用）
     MODAL = ".ant-modal:visible"
+    # 关联单据输入框右侧的放大镜：Ant Design 图标，不是 button。
+    LINK_ICON = "i.anticon-search, .ant-input-suffix .anticon-search"
     # 后置清理：子类覆盖 CLEANUP_PATHS 即可复用 cleanup_module
     CLEANUP_PATHS: dict[str, str] = {}
     CLEANUP_MAX_LOOPS = 30
@@ -178,6 +180,18 @@ class BasePage:
 
     @allure.step("确认二次弹窗")
     def confirm_popup(self) -> None:
+        before = self.page.locator(self.MODAL).count()
+        # Ant Design 确认框的主按钮优先，避免“确 定/确定”文本差异
+        confirm = self.page.locator(".ant-modal-confirm:visible")
+        if confirm.count():
+            primary = confirm.last.locator(".ant-modal-confirm-btns .ant-btn-primary").last
+            if primary.count() and primary.is_visible():
+                primary.click()
+                for _ in range(15):
+                    if self.page.locator(self.MODAL).count() < before:
+                        break
+                    self.page.wait_for_timeout(200)
+                return
         for scope in (
             self.page.locator(".ant-modal-confirm:visible"),
             self.page.locator(".ant-popover:visible"),
@@ -186,13 +200,17 @@ class BasePage:
             if scope.count() == 0:
                 continue
             if self._click_visible_text_button(scope.last, "确 定") or self._click_visible_text_button(scope.last, "确定"):
-                self.page.wait_for_timeout(300)
+                for _ in range(15):
+                    if self.page.locator(self.MODAL).count() < before:
+                        break
+                    self.page.wait_for_timeout(200)
                 return
-        # 兜底：全局可见按钮
-        assert (
-            self._click_visible_text_button(self.page, "确 定")
-            or self._click_visible_text_button(self.page, "确定")
-        ), "未找到确认按钮"
+        # 兜底：全局可见按钮；没有确认框时直接跳过（调用方可能已经确认过）
+        if self._click_visible_text_button(self.page, "确 定") or self._click_visible_text_button(
+            self.page, "确定"
+        ):
+            return
+        log.info("activating 确认弹窗 跳过：当前没有确认按钮")
 
     @allure.step("获取列表行")
     def get_list_row(self, number: str) -> Locator:
@@ -277,7 +295,9 @@ class BasePage:
     @allure.step("搜索并选择商品：{keyword}")
     def choose_product(self, keyword: str, mode: str = "dblclick") -> None:
         log.info(f"activating 选择商品 {keyword} mode={mode}")
-        modals = self.page.locator(".ant-modal:visible")
+        # 不能用 .last 盲选：新增表单本身也是 .ant-modal，按标题过滤
+        modals = self.page.locator(self.MODAL).filter(has_text="选择商品")
+        assert modals.count(), "当前没有商品选择弹窗"
         product = modals.last
         assert "选择商品" in product.locator(".ant-modal-title").inner_text(), (
             "当前不是商品选择弹窗"
@@ -354,6 +374,10 @@ class BasePage:
     @allure.step("关闭新增弹窗")
     def close_modal(self) -> None:
         self.dismiss_guide()
+        if self.page.locator(self.MODAL).count() == 0:
+            log.info("activating 关闭弹窗 跳过：当前无弹窗")
+            return
+        before = self.page.locator(self.MODAL).count()
         modal = self.get_modal()
         try:
             button = self._first_visible(
@@ -370,7 +394,12 @@ class BasePage:
             self._click_visible_text_button(self.page, "确 定") or self._click_visible_text_button(
                 self.page, "确定"
             )
-        self.wait_modal_closed(timeout=8000)
+        # 嵌套弹窗只关最上层：等待弹窗数量减少，而不是全部消失
+        for _ in range(27):
+            if self.page.locator(self.MODAL).count() < before:
+                return
+            self.page.wait_for_timeout(300)
+        raise AssertionError("弹窗未关闭")
 
     @allure.step("填写明细单价")
     def fill_editable_price(self, value: str | int, row_index: int = 0) -> None:
@@ -425,6 +454,37 @@ class BasePage:
     def get_row_count(self) -> int:
         log.info("activating 读取列表行数")
         return self.get_rows().count()
+
+    @allure.step("获取关联单据弹窗")
+    def get_link_modal(self) -> Locator:
+        """返回当前可见的关联单据弹窗（按“单据编号”查询框识别）。"""
+        return self.page.locator(self.MODAL).filter(
+            has=self.page.locator("input[placeholder*='单据编号']")
+        ).last
+
+    @allure.step("打开关联单据搜索：{label_keyword}")
+    def open_link_search(self, label_keyword: str = "关联") -> Locator:
+        """点击关联字段右侧放大镜，返回关联弹窗。
+
+        三个模块的 label 不同：采购订单=关联请购单，采购入库=关联订单，
+        采购退货=关联单据；但 DOM 一样：readonly input + span.ant-input-suffix
+        > i.anticon-search。放大镜不是 button，不能用 get_by_role('button')。
+        """
+        log.info(f"activating 打开关联单据搜索 {label_keyword}")
+        self.dismiss_guide()
+        form_item = self.get_modal().locator(".ant-form-item").filter(
+            has_text=label_keyword
+        ).first
+        assert form_item.count(), f"未找到关联字段：{label_keyword}"
+        icon = form_item.locator(self.LINK_ICON).first
+        assert icon.count(), f"关联字段 {label_keyword} 右侧未找到放大镜"
+        icon.click()
+        for _ in range(15):
+            modal = self.get_link_modal()
+            if modal.count():
+                return modal
+            self.page.wait_for_timeout(200)
+        raise AssertionError(f"关联弹窗未打开：{label_keyword}")
 
     @allure.step("关联单据：{number}")
     def link_bill(self, input_id: str, number: str, bill_mode: str = "check") -> None:
