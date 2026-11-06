@@ -7,7 +7,7 @@ import pytest
 def main():
     """运行测试套件。"""
     args = [
-        "testcases/",
+        "testself/",
         "-v",
         "--tb=short",
         "-s",

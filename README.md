@@ -1,386 +1,245 @@
-# RAG + Playwright + LLM UI 自动化测试框架
+# ERP 测试 Agent 平台
 
-面向自研 ERP 系统的智能 UI 自动化测试框架，结合 POM 模式、RAG 知识库和 LLM 智能辅助。
-
-## 特性
-
-- **POM 模式**：Page Object 分层，测试用例只调用页面方法
-- **Accessibility Tree 定位**：语义化定位器，减少前端重构影响
-- **数据驱动**：YAML 管理测试数据，`@pytest.mark.parametrize` 注入参数
-- **RAG 知识库**（主链路已跑通）：业务文档切分 + OCR → BGE-M3 dense/sparse 双向量 → Milvus 混合检索
-- **LLM 辅助**（规划中）：Qwen 双模型策略，AIGC 用例生成与定位自愈
-
-## 技术栈
-
-- 测试框架：Pytest 9.1.1+
-- 浏览器自动化：Playwright 1.64.0+
-- 配置管理：Pydantic-Settings
-- 数据管理：PyYAML + Pydantic
-- 文档处理：PyMuPDF（PDF 解析/图片提取）+ RapidOCR（截图文字识别）
-- 向量嵌入：BGE-M3（FlagEmbedding，本地推理，dense 1024 维 + sparse 词权重）
-- 向量库：Milvus standalone v2.5.14（Docker Compose：etcd + MinIO + milvus）+ pymilvus
-- 规划中：LangChain / LangGraph（AIGC 编排）
-
-## 项目结构
+基于 LangChain / LangGraph 的 ERP 测试 Agent 平台。当前主线是两个 Agent：
 
 ```
-RAG_UI_Test/
-├── agent/                  # AI Agent 层
-│   ├── config.py           # RAG 配置（RAG_ 前缀）
-│   ├── schema.py           # Milvus collection schema + 索引管理
-│   ├── embedding.py        # BGE-M3 嵌入 + 数据摄入 + 混合检索
-│   ├── load_documents.py   # 文档切分统一入口
-│   └── ...                 # app/models/rag_pipline/cache/security/monitering 仍为占位
-├── tools/document/         # 文档处理层（MD / PDF 解析切分 + OCR）
-├── pw_core/                # Playwright 核心包
-│   ├── conf.py             # 浏览器/API 配置
-│   ├── base_page.py        # 页面基类：定位/动作/等待/断言/弹窗/表格
-│   ├── base_test.py        # BaseTest + BasePage 契约检查
-│   └── driver/             # Web 驱动层
-│       ├── browser_session.py  # 测试类级浏览器
-│       ├── context_driver.py   # 用例 context/page 包装
-│       ├── driver_manager.py
-│       └── web_driver.py
-├── tools/view_milvus_data.py  # Milvus 数据浏览与检索演示
-├── page/                   # Page Object 层
-│   ├── login_page.py       # 登录页
-│   ├── purchase_page.py    # 采购管理列表页/新增弹窗
-│   └── retail_page.py      # 零售管理列表页/新增弹窗
-├── data/                   # 只放 YAML 测试数据
-│   ├── config.yaml         # base_url 等配置
-│   └── login_cases.yaml    # 登录测试数据
-├── data_loader.py          # YAML 加载 + Pydantic 校验
-├── testcases/              # 测试用例
-│   ├── test_login.py       # 登录测试（parametrize）
-│   └── test_purchase.py    # 采购管理 UI 测试（采购订单/入库/退货）
-├── conftest.py             # 根级浏览器/context/page/auth fixtures
-├── testself/               # 框架自测（文档处理、嵌入检索质量）
-├── docs/                   # 业务文档（RAG 知识库来源）
-├── cache/                  # 切分产物与 OCR 缓存（git 忽略）
-├── knowledge-store/        # 知识库产物（导出/评测/备份）
-├── plan/                   # 项目计划与阶段总结
-├── docker-compose.yml      # Milvus 部署
-├── volumes/                # Milvus/etcd/MinIO 数据（git 忽略）
-├── .env                    # 环境配置（含密钥，git 忽略）
-├── artifacts/              # 运行时截图/trace（自动生成，已忽略）
-├── AGENTS.md               # 给 AI 助手的项目说明
-└── main.py                 # 入口示例
+PageAgent（页面交互）                 CaseAgent（用例生成）
+  ├─ 异步 Playwright 采集控件/结构  →  artifacts/dom/<module>_capture.json
+  ├─ 自动登录、截图、搜索/抓取          ├─ 读取控件 JSON
+  └─ 文件读写                          ├─ 生成结构化用例
+                                       ├─ validate_cases 校验
+                                       └─ json_to_xlsx 写出 xlsx
 ```
+
+> 旧的 `infrastructure/` 同步 POM / UI 测试驱动已移除，本项目不再依赖它。
+> 浏览器自动化统一走 `tool/web.py` 的异步 Playwright。
+
+## 当前已实现（重点）
+
+### Agent 层
+
+| 模块 | 能力 |
+|------|------|
+| `agent/base.py` | `BaseAgent`：固定 `agent_type` / `system_prompt`，把 `Skills/*.md` 拼进 prompt，交给 LangGraph `create_react_agent` 执行 |
+| `agent/agents.py` | `PageAgent`、`CaseAgent`、`ERPAgentHub`、轻量意图识别 |
+| `agent/runner.py` | `AgentRunner`：任务分发、执行、结果包装 |
+| `agent/llm.py` | `build_llm()`：千问 / DeepSeek 共用 `ChatOpenAI`，支持 fast / strong |
+| `agent/loop_logger.py` | 按行记录模型调用、工具调用、token；控制台 + 文件同步输出 |
+
+### 工具层
+
+| 工具 | 作用 |
+|------|------|
+| `capture_page` | 异步 Playwright 采集 ERP 页面：list / add / all，含登录守卫、截图、JSON 落盘 |
+| `close_browser` | 释放采集浏览器 |
+| `web_search` / `web_fetch` | 搜索业务语义、抓取网页或调用 HTTP 接口 |
+| `read_file` / `write_file` / `edit_file` | 读写控件 JSON、用例 JSON、代码文件 |
+| `list_dir` | 列出 workspace 内目录，帮助 Agent 自己发现控件文件 |
+| `read_xlsx` / `xlsx_to_json` / `json_to_xlsx` | Excel 读取、JSON 互转、测试用例布局 |
+| `validate_cases` | 写 xlsx 前校验字段、编号、步骤、备注、执行情况 |
+
+### 页面采集
+
+- 异步 Playwright，支持 `scenario=list/add/all`；
+- 登录态失效时自动登录，账号优先取 `ToolContext.config`，其次取 `.env` 的 `ERP_USERNAME` / `ERP_PASSWORD`；
+- 采集结果：
+  - `artifacts/dom/<module>_capture.json`（总汇总）
+  - `artifacts/dom/<module>_facts_compact.json`
+  - `artifacts/dom/<module>_list.json`
+  - `artifacts/dom/<module>_add.json`
+  - `artifacts/screenshots/<module>_list.png` / `_add.png`
+
+### 用例生成
+
+1. `list_dir("artifacts/dom")` 找到 `<module>_capture.json`；
+2. `read_file` 读取控件字段、表格列、弹窗和下拉选项；
+3. 生成用例 JSON；
+4. `validate_cases` 校验，直到 `ok=true`；
+5. `json_to_xlsx` 写出 xlsx。
+
+控件文件找不到时才允许 `web_search` 补充业务语义作为兜底。
+
+### 日志
+
+- 每次运行独立文件：`reports/logs/test_run_<YYYYmmdd_HHMMSS>_<pid>.log`；
+- Agent 循环日志形如：
+
+```text
+[PageAgent] task start | 采集采购订单页面的控件
+[PageAgent] model#1 start | messages=2 | last=human:...
+[PageAgent] model#1 end | finish=tool_calls | tool_calls=capture_page | usage=in=2805 out=23
+[PageAgent] tool#1 start | capture_page | args={...}
+[PageAgent] tool end | capture_page | result=...
+[PageAgent] model#2 end | final | ...
+[PageAgent] task done | 12.3s | messages=4
+```
+
+- 开启 `LANGSMITH_TRACING=true` 后，云端还可查看完整 model/tool trace。
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 安装
 
 ```bash
-# 使用 uv（推荐）
 uv sync
-
-# 或使用 pip
-pip install -e .
-
-# 安装 Playwright 浏览器
 playwright install chromium
 ```
 
-### 2. 运行测试
+### 2. 配置 `.env`
+
+```dotenv
+LLM_API_KEY=...
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_FAST_MODEL=qwen3.8-flash
+LLM_STRONG_MODEL=qwen3.8-max
+
+ERP_USERNAME=jsh
+ERP_PASSWORD=123456
+
+# 可选：LangSmith
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=...
+LANGSMITH_PROJECT=project_api
+```
+
+### 3. 运行测试
 
 ```bash
-# 运行所有测试
+# 当前主测试目录：testself/
 pytest
-
-# 运行冒烟测试
-pytest -m smoke
-
-# 运行特定测试文件
-pytest testcases/test_login.py
-pytest testcases/test_purchase.py
-
-# 只查看参数化展开结果（不启动浏览器）
 pytest --collect-only -q
 
-# 详细输出
-pytest -v -s
+# 单个模块
+pytest testself/test_case_validator.py -q
+pytest testself/test_xlsx_handler.py -q
 ```
 
-运行日志写入 `reports/logs/test_run.log`；失败截图写入 `reports/screenshots/`；
-需要 Playwright trace 时设置 `PW_TRACE=1`，文件写入 `artifacts/traces/`。
+`testself/test_pageagent.py::TestAgentRunner` 会真实调用 LLM + 浏览器，
+需要 `.env`、网络和 Chromium，单条约 2~3 分钟。
 
-### 3. 类级浏览器 / 页面复用
-
-- **测试类级浏览器**：每个测试类只启动一次 Chromium；同一测试类共用一个 `browser context` 和 `page`。
-- **类级前置**：`ensure_home()` 判断当前是否“已登录并进入 `/dashboard/analysis`”；
-  已登录直接通过，否则执行 UI 登录、保存 `storage_state` 快照，再进入首页。
-- **用例级复用**：同一测试类的所有用例共用同一个 page；每条用例开始前由 `home_guard` 再次确认首页。
-- **用例后置**：每条用例结束后调用 `BasePage.back_to_home()`，关闭引导/弹窗并回到
-  `/dashboard/analysis`，再执行下一条用例。
-- **登录用例例外**：`test_login.py` 标记 `@pytest.mark.no_auth`，在同一类级浏览器上新建干净
-  context/page，从登出状态开始，不参与共享首页。
-
-### 4. 调试
+### 4. 运行 AgentRunner 示例
 
 ```bash
-# 显示浏览器窗口并放慢操作；默认 1920x1080 全屏视口
-$env:HEADLESS="false"
-$env:SLOW_MO="500"
-$env:FULLSCREEN="true"
-$env:VIEWPORT_WIDTH="1920"
-$env:VIEWPORT_HEIGHT="1080"
-pytest testcases/test_login.py -v -s
+python examples/run_agent.py
 ```
 
-### 5. 日志
-
-- 用例开始：`activating test_purchase_001_insert_row`
-- 页面动作：`activating 打开采购列表`、`activating 点击新增`、`activating 插入行`
-- 断言成功：`ASSERT PASSED | test_purchase_001_insert_row:29 | page.get_editable_row_count() == 1`
-- 断言失败：`ASSERT FAILED | ...`
-- 用例结果：`PASSED` / `FAILED`
-- 文件：`reports/logs/test_run.log`
-
-逐条断言日志由 `pytest.ini` 的 `enable_assertion_pass_hook = true` 开启；
-修改测试代码后如果看不到 `ASSERT PASSED`，清除 `testcases/__pycache__` 再运行。
-
-## RAG 知识库
-
-### 1. 准备环境
-
-```bash
-# 编辑根目录 .env（已存在，含密钥，已被 git 忽略）
-
-# 启动 Milvus（etcd + MinIO + milvus-standalone，首次会拉镜像）
-docker compose up -d
-docker compose ps          # 三个容器都应为 healthy
-```
-
-BGE-M3 模型需已下载到本地，路径由 `RAG_EMBEDDING_MODEL_PATH` 指定，默认：
-`D:\huggingface_cache\modelscope\models\BAAI--bge-m3\snapshots\master`。
-
-### 2. 文档切分
-
-把业务文档放进 `docs/`（支持 `.md` 与 `.pdf`），然后：
-
-```bash
-python -m agent.load_documents
-```
-
-产物：
-
-- `cache/chunks.json`：全量切分结果（摄入 Milvus 的唯一数据源）
-- `knowledge-store/images/`：从 PDF 提取的截图
-- `cache/ocr_cache.json`：OCR 结果缓存（按图片 MD5，二次运行秒级完成）
-
-当前 `docs/` 下 4 份文档切出 **235 个 chunk**：text 103 / image 102 / table 30。
-
-### 3. 写入向量库
-
-```python
-from agent.embedding import ingest
-
-ingest("cache/chunks.json")     # BGE-M3 批量嵌入 → 写入 erp_knowledge
-```
-
-> ✅ Phase 2.5 起 `ingest()` 会先校验 chunks（重复主键、OCR 失败/traceback、
-> 绝对图片路径都会直接拒绝写入），再按 `source_doc` 删除旧行并 upsert。
-> 每次摄入会在 `knowledge-store/manifests/{timestamp}.json` 留下来源、MD5、
-> 类型分布、模型路径与耗时。
->
-> 不要用 `cache/_all_chunks.json`（历史测试副产物，可能含 OCR 失败文本）。
-
-### 4. 检索
-
-```python
-from agent.embedding import hybrid_search
-
-results = hybrid_search("采购入库的操作流程", filters={"module": "采购管理"})
-for r in results:
-    print(r.summary())
-```
-
-- dense + sparse 双路召回，RRFRanker(k=60) 融合
-- 支持过滤：`module` / `chunk_type` / `source_doc` / `section_title` / `is_plugin`
-- **dense cosine 门控**：`RAG_SEARCH_SCORE_THRESHOLD` 默认 `0.52`
-  （有效查询实测 0.53~0.75，无关查询 0.42~0.51）；无关查询返回空列表
-- 进程级 BGE-M3 单例：稳态单查询 **245~294ms**（CPU），Milvus 引擎侧 6~13ms
-- 结果按 `(source_doc, page, section_title, chunk_type)` 去重，避免同图副本挤占 Top-K
-
-命令行浏览与检索演示：
-
-```bash
-python tools/view_milvus_data.py --overview
-python tools/view_milvus_data.py --type image --module 采购管理 --limit 3
-python tools/view_milvus_data.py --search "零售出库页面有哪些按钮"
-```
-
-### 5. 框架自测
-
-`testself/` 不在 `pytest.ini` 的 `testpaths` 内，需显式指定路径：
-
-```bash
-pytest testself/test_md_processor.py -v
-pytest testself/test_pdf_processor.py -v -s          # 含 OCR，首次较慢
-pytest testself/test_embedding_retrieval.py -v -s    # 需 Milvus 已启动
-pytest testself/test_agent_stream.py -v              # Agent 流式事件与渲染，不调 LLM
-```
-
-## Agent 代码生成（流式）
-
-`agent/Agents/` 下的控件获取 / 步骤生成 / 最终编排 Agent 默认**流式输出**：
-模型的思考（reasoning）、生成正文、工具调用与工具返回都会实时打印，不再等
-整段结果生成完才显示。
-
-```bash
-# dry-run：只生成、不写文件；思考与代码实时输出
-python -m agent.Agents.pipeline --sheet 采购页 --limit 3
-
-# 关闭流式，等待完整结果后一次性返回
-python -m agent.Agents.pipeline --sheet 采购页 --limit 3 --no-stream
-
-# 确认无误后写回 page/ 与 testcases/
-python -m agent.Agents.pipeline --sheet 采购页 --apply
-```
-
-流式开关（写在根目录 `.env`，不设置时用默认值）：
-
-| 环境变量 | 默认 | 说明 |
-|----------|------|------|
-| `AGENT_STREAM` | `true` | 是否流式输出 |
-| `AGENT_SHOW_THINKING` | `true` | 是否打印模型的思考过程 |
-| `AGENT_STREAM_COLOR` | `auto` | `auto` / `always` / `never` |
-| `AGENT_MAX_TURNS` | `8` | 单个 Agent 最多轮次（含工具调用） |
-
-需要自己消费流式事件（例如接到 Web 界面）时，用异步接口：
+或在异步代码里：
 
 ```python
 import asyncio
 
-from agent.Agents.step_agent import StepAgent
+from agent.runner import AgentRunner
 
 
 async def main() -> None:
-    agent = StepAgent()
-    async for event in agent.astream("页面类 PurchasePage，点击保存"):
-        if event.kind == "thinking":
-            print("[思考]", event.text, end="")
-        elif event.kind == "content":
-            print("[生成]", event.text, end="")
+    runner = AgentRunner()
+    result = await runner.run("生成采购订单的测试用例")
+    print(result["agent_type"], result["status"])
+    print(result["content"])
 
 
 asyncio.run(main())
 ```
 
-## 数据驱动测试
+## Agent 说明
 
-测试数据统一放在 `data/*.yaml`，由 `data_loader.py` 加载并校验，再用
-`@pytest.mark.parametrize` 注入用例：
+### PageAgent
 
-```yaml
-# data/login_cases.yaml
-- name: valid_default
-  username: "jsh"
-  password: "123456"
-  expect_success: true
+负责与外部系统交互：
 
-- name: wrong_password
-  username: "jsh"
-  password: "wrong_password"
-  expect_success: false
+- 采集控件与页面结构；
+- 自动登录 ERP；
+- 调用 HTTP / 抓取网页；
+- 读写文件。
+
+工具：`capture_page`、`close_browser`、`web_fetch`、`web_search`、`read_file`、`write_file`、`edit_file`。
+
+### CaseAgent
+
+负责数据处理：
+
+- 读取控件 JSON；
+- 生成测试用例；
+- 校验用例；
+- 写 xlsx。
+
+工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`read_xlsx`、`xlsx_to_json`、`json_to_xlsx`、`validate_cases`、`web_search`。
+
+### 意图识别
+
+- 包含“用例 / 测试点 / 测试场景 / 测试设计 / 生成测试” → `CaseAgent`
+- 其他任务 → `PageAgent`
+
+## 目录结构
+
 ```
+RAG_UI_Test/
+├── agent/                  # Agent 核心（base/agents/runner/llm/config/loop_logger）
+├── tool/                   # LangChain 工具（文件、xlsx、web、校验、context）
+├── Skills/                 # page / case_generation 两份技能
+├── testself/               # 当前 pytest 主目录
+├── examples/run_agent.py   # AgentRunner 示例
+├── frontend/index.html     # 前端静态原型（尚未接后端）
+├── api/                    # 后端 API 占位（未实现）
+├── core/                   # 核心占位（未实现）
+├── data/                   # YAML 数据
+├── reports/logs/           # 每次运行独立日志
+├── artifacts/              # 运行时产物：dom / screenshots / xlsx
+├── plan/                   # 历史设计与阶段总结
+└── DomToExcel/             # 旧工具/应用（legacy）
+```
+
+## 配置说明
+
+| 变量 | 用途 |
+|------|------|
+| `LLM_API_KEY` / `LLM_BASE_URL` | 模型鉴权与地址 |
+| `LLM_FAST_MODEL` / `LLM_STRONG_MODEL` | 快/强模型 |
+| `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` / `LLM_MAX_RETRIES` | 生成参数 |
+| `ERP_USERNAME` / `ERP_PASSWORD` | 登录态失效时自动登录 |
+| `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | 可选云端 trace |
+
+工具运行目录由 `ToolContext` 控制：
 
 ```python
-# testcases/test_login.py
-LOGIN_CASES = load_login_cases()
+from tool.context import configure
 
-
-class TestLogin:
-    @pytest.mark.parametrize("case", LOGIN_CASES, ids=[c.name for c in LOGIN_CASES])
-    def test_login(self, login_page: LoginPage, case) -> None:
-        login_page.goto_login()
-        login_page.login_and_wait(
-            case.username, case.password, expect_success=case.expect_success
-        )
+configure(
+    workspace="D:/RAG/RAG_UI_Test",
+    artifacts="D:/RAG/RAG_UI_Test/artifacts",
+    config={"headless": True},
+)
 ```
 
-约定：`data/` 目录只允许 `.yaml` 文件，加载逻辑放在根目录 `data_loader.py`。
+默认 `workspace` 是进程 CWD；相对路径都以它为基准。
 
-## 配置
+## 已知限制
 
-- `data/config.yaml`：`base_url`
-- 环境变量（前缀 `PW_`）：`PW_BROWSER_TYPE`、`PW_HEADLESS`、`PW_SLOW_MO`、
-  `PW_TRACE_ENABLED`、`PW_VIEWPORT_WIDTH` 等，详见 `pw_core/conf.py`
-- 环境变量（RAG 前缀）：写在根目录 `.env`，分四组，详见 `agent/config.py`
-  - `RAG_MILVUS_*`：`URI`、`COLLECTION_NAME`、`COLLECTION_ALIAS`、`TIMEOUT`
-  - `RAG_EMBEDDING_*`：`MODEL_PATH`、`DEVICE`、`USE_FP16`、`BATCH_SIZE`、`DENSE_DIM`、`MAX_LENGTH`
-  - `RAG_SEARCH_*`：`TOP_K`、`DENSE_TOP_K`、`SPARSE_TOP_K`、`RRF_K`、`SCORE_THRESHOLD`
-- 环境变量（LLM / Agent）：`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_FAST_MODEL`、
-  `LLM_STRONG_MODEL`、`LLM_TEMPERATURE`、`LLM_MAX_TOKENS`、`AGENT_STREAM`、
-  `AGENT_SHOW_THINKING`、`AGENT_STREAM_COLOR`、`AGENT_MAX_TURNS`
+- `AgentRunner.max_turns` 目前只保存，未传给 graph；轮数仍由 LangGraph 默认值控制。
+- 没有独立的 API Agent；`web_fetch` 可以发 HTTP 请求，但没有接口断言工具。
+- CaseAgent 在找不到控件时仍可能走 `web_search`，需要在提示词/校验层继续加固。
+- 当前 Agent 链路未接入 RAG。
+- 后端 API 与前端交互尚未实现，`frontend/index.html` 只是静态原型。
 
-```bash
-export PW_BROWSER_TYPE=firefox
-export PW_HEADLESS=false
-export PW_TRACE_ENABLED=true
-```
+## 下一步（方向性）
 
-## 测试标记
+1. **后端**
+   - 实现 `api/`：任务提交、状态查询、日志/产物下载、用例审核；
+   - `AgentRunner` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤任务；
+   - 工具层继续补强控件发现、路径约定和执行类工具。
 
-- `@pytest.mark.smoke`：冒烟测试（关键路径）
-- `@pytest.mark.regression`：回归测试
-- `@pytest.mark.e2e`：端到端流程
+2. **前端**
+   - 将 `frontend/index.html` 接入后端 API；
+   - 展示 Agent 循环日志、trace、控件 JSON、xlsx 和截图；
+   - 支持用例生成结果的人工审核。
 
-## 开发指南
+> 以上为方向性规划，详细接口与排期以后续 `plan/` 文档为准。
 
-### 新增页面对象
+## 历史与兼容
 
-1. 在 `page/` 创建 `xxx_page.py`，继承 `BasePage`
-2. 用 `@property` 定义元素定位器（优先 A11y 语义定位）
-3. 实现业务方法与 `assert_*` 断言
-4. 在 `page/__init__.py` 导出
-
-### 新增测试数据
-
-1. 在 `data/` 新建或编辑 `.yaml`
-2. 在 `data_loader.py` 添加 Pydantic 模型与加载函数
-3. 在测试模块加载数据并 `@pytest.mark.parametrize` 传参
-
-### 新增测试用例
-
-1. 在 `testcases/` 创建 `test_xxx.py`
-2. 使用 fixtures 获取 `login_page` 等 Page Object
-3. 参数全部通过 `@pytest.mark.parametrize` 传入，遵循 Arrange-Act-Assert
-
-## 项目计划
-
-- 完整架构与路线图：`plan/initial_project_plan_2026-10-17.md`
-- **当前进度对齐与下一步计划**：`plan/phase2_alignment_2026-10-19.md`
-- **Phase 2.5 完成报告**：`plan/phase2_5_completion_2026-10-19.md`
-- Phase 1 实施总结：`plan/think or choice/phase1_implementation_summary.md`
-- 选型与决策文档：`plan/think or choice/`
-  - `rag_retrieval_design.md`：检索层方案对比与 Milvus schema
-  - `chunking_measures.md`：文档切分与图片处理方案
-  - `chunk_id_design.md`：chunk_id 主键方案分析
-  - `aigc_code_generation_strategy.md`：Phase 3 三条生成路线选型
-  - `parent_child_analysis.md`：父子分层检索论证（结论：不需要）
-  - `pdf_processing_optimization.md`：PDF/OCR 性能优化记录
-- AI 协作说明：`AGENTS.md`
-- POM 代码生成规范：`.codex/skills/pom-ui-automation-generator/SKILL.md`
-
-## 当前进度
-
-| 阶段 | 状态 |
-|------|------|
-| Phase 1 基础设施层（Playwright / POM / 数据驱动） | ✅ 已完成 |
-| Phase 2 RAG 知识库（切分 + OCR + BGE-M3 + Milvus 混合检索） | ✅ 主链路已跑通，库内 235 条 |
-| Phase 2.5 数据质量与工程加固 | ✅ 已完成（位置型主键、幂等 ingest、OCR 修复、dense 门控、manifest） |
-| Phase 3 AIGC 测试用例生成 | 🚧 Phase 3.0 基础设施已完成（pw_core/BasePage/Driver/契约测试），3.1+ 待做 |
-| Phase 4 控件定位自愈 | ⏳ 未开始 |
-| Phase 5 监控与报告 | ⏳ 未开始 |
-
-## 下一步
-
-- [x] Phase 2.5：修数据源污染、稳定 chunk_id、检索性能与可信度门控、摄入溯源
-- [ ] Phase 3：基础设施加固（3.0 已完成）→ Spec 中间层 + 模板化代码生成 + AST 校验 + 试跑闭环
-- [ ] Phase 4：自愈机制
-- [ ] Phase 5：监控与报告
+- `infrastructure/` 已删除；不要再参考旧的 POM / 同步 Playwright 写法。
+- `DomToExcel/` 是旧工具/应用，保留兼容，不是新 Agent 链路的依赖。
+- `docs/`、`plan/`、`docker/`、`knowledge-store/` 中的 RAG 资料是历史资产；RAG 尚未接入当前 Agent。
 
 ## 许可证
 
