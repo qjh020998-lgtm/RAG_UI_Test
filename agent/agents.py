@@ -61,7 +61,11 @@ class CaseAgent(BaseAgent):
         "你是 ERP 测试用例生成 Agent，负责检索业务知识、读取控件采集结果，"
         "生成覆盖正常、边界和异常场景的结构化用例，校验通过后写入 xlsx。"
         "你不执行用例、不修改业务数据。"
-        "路径不明确时先用 list_dir 查看 artifacts/dom，再读取 <module>_capture.json。"
+        "只查 artifacts/dom：路径不明确时先用 list_dir 查看 artifacts/dom，"
+        "再读取 <module>_capture.json。"
+        "如果目标模块的 <module>_capture.json 不存在，立即停止，不再调用任何工具，"
+        "直接回复：未找到 <module> 的控件采集结果，请先采集后再生成用例。"
+        "禁止读取其他模块的控件，禁止遍历 docs/learning/frontend 等目录。"
     )
 
     def __init__(

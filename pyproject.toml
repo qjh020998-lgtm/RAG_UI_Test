@@ -24,6 +24,10 @@ dependencies = [
     "pillow>=10.0.0",
     # API driver for optional test-data setup
     "httpx>=0.28.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "sqlalchemy>=2.0.0",
+    "aiosqlite>=0.20.0",
     "allure-pytest>=2.16.2",
     "pytest-playwright>=0.10.0",
     "chroma>=0.2.0",

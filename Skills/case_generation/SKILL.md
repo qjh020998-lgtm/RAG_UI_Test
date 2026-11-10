@@ -23,9 +23,10 @@ ERP 测试用例，校验通过后写入 xlsx。只设计用例，不执行用�
 
 ## 4. 工作流
 
-1. 先 `list_dir("artifacts/dom")` 找到 `<module>_capture.json`，再 `read_file` 读取，
-   提取字段名、必填项、枚举值、按钮和表格列。
-   若不确定当前 workspace 根目录，先从 `list_dir(".")` 逐级定位。
+1. 从任务中提取目标模块，先 `list_dir("artifacts/dom")` 找到
+   `<module>_capture.json`，再 `read_file` 读取，提取字段名、必填项、枚举值、按钮和表格列。
+   如果目标模块的 `<module>_capture.json` 不存在，立即停止并说明缺少控件，
+   不得读取其他模块的控件，也不得遍历 `docs/`、`learning/`、`frontend/` 等目录。
 2. 按“正常流程 → 边界值 → 异常场景”设计用例，避免与已有用例重复。
 3. 把测试点展开成连续编号的步骤，每步都有可断言的预期。
 4. 输出用例 JSON（`id/priority/module/purpose/pre/steps/expected/assertion/manual/automation/note`）。

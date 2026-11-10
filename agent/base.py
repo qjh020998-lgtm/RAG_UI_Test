@@ -1,6 +1,7 @@
 """Agent 基类：固定类型与提示词，模型和工具由具体 Agent 传入。
 
-ReAct 循环交给 LangGraph ``create_react_agent``，本模块不实现工具执行、重试或轮数控制。
+ReAct 循环交给 LangGraph ``create_react_agent``；本模块只负责把
+``recursion_limit``（graph 步数）传给 graph。
 """
 from __future__ import annotations
 
@@ -96,8 +97,16 @@ class BaseAgent:
         parts = [self.system_prompt, skill, COMMON_RULES]
         return "\n\n".join(part.strip() for part in parts if part and part.strip())
 
-    async def run(self, task: str) -> AIMessage:
-        """执行一次任务，返回最终 AIMessage。"""
+    async def run(
+        self,
+        task: str,
+        *,
+        recursion_limit: int = 20,
+    ) -> AIMessage:
+        """执行一次任务，返回最终 AIMessage。
+
+        ``recursion_limit`` 是 LangGraph 的最大 graph 步数（不是 ReAct 轮数）。
+        """
         if not task or not task.strip():
             raise ValueError("task 不能为空")
 
@@ -108,7 +117,10 @@ class BaseAgent:
         try:
             result = await self._agent.ainvoke(
                 {"messages": [HumanMessage(content=task)]},
-                config={"callbacks": [AgentLoopLogger(agent=label)]},
+                config={
+                    "callbacks": [AgentLoopLogger(agent=label)],
+                    "recursion_limit": recursion_limit,
+                },
             )
         except Exception:
             logger.exception(

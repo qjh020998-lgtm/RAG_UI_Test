@@ -1,4 +1,4 @@
-"""PageAgent 集成自测。
+﻿"""PageAgent 集成自测。
 
 测试分四个隔离块：
 1. 意图识别：纯逻辑，无外部依赖
@@ -267,8 +267,8 @@ class TestAgentRunner:
 
     def test_runner_initialization(self) -> None:
         """AgentRunner 应能正常初始化。"""
-        runner = AgentRunner(max_turns=5)
-        assert runner.max_turns == 5
+        runner = AgentRunner(max_steps=5)
+        assert runner.max_steps == 5
         assert runner.hub is not None
 
     def test_runner_dispatch_page_task(self) -> None:
@@ -291,7 +291,7 @@ class TestAgentRunner:
         - 登录失败应返回明确错误
         - 登录成功后应能正常采集
         """
-        runner = AgentRunner(max_turns=10)
+        runner = AgentRunner()
         # 任务描述中应包含登录信息，或者 Agent 应自动处理登录
         result = asyncio.run(runner.run(
             "采集采购订单页面的控件信息，包含新增表单界面的控件信息"
@@ -303,7 +303,7 @@ class TestAgentRunner:
 
     def test_runner_execute_case_task(self) -> None:
         """Runner 执行用例生成任务。"""
-        runner = AgentRunner(max_turns=10)
+        runner = AgentRunner()
         result = asyncio.run(runner.run("生成采购订单的测试用例10条，写入testself/selfcache/artifacts/xlsx中"))
         print(f"状态：{result['status']}")
         print(f"Agent 类型：{result['agent_type']}")
@@ -311,7 +311,7 @@ class TestAgentRunner:
 
     def test_runner_explicit_agent_type(self) -> None:
         """Runner 显式指定 Agent 类型应正确执行。"""
-        runner = AgentRunner(max_turns=5)
+        runner = AgentRunner(max_steps=5)
         result = asyncio.run(runner.run_with_agent_type(
             "读取 artifacts 目录",
             AgentType.PAGE,

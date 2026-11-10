@@ -18,7 +18,7 @@ PageAgent 采集页面控件/结构  →  CaseAgent 生成、校验并写出测�
 - 模型：`ChatOpenAI`，兼容千问（DashScope）与 DeepSeek
 - 浏览器：`async_playwright`（**不是**旧的同步 POM 驱动）
 - 测试：pytest，当前 testpaths 为 `testself/`
-- 正在规划：后端 API + 前端交互界面
+- 已起步：FastAPI `api/main.py` + `frontend/chat.html`；待补 Agent/Skill 管理
 
 > `infrastructure/`（旧同步 POM / UI 测试 / conftest 浏览器 fixture）已删除，
 > 不要再新增或恢复 `sync_playwright` 的 UI 测试栈。
@@ -36,19 +36,23 @@ PageAgent 采集页面控件/结构  →  CaseAgent 生成、校验并写出测�
 | `Skills/` | ✅ | 两份技能：`page/SKILL.md`、`case_generation/SKILL.md` |
 | `testself/` | ✅ | 工具/Agent 自测；含真实 AgentRunner 集成测试 |
 | 页面采集 | ✅ | `capture_page`：list/add/all，自动登录，截图与 JSON 落 `artifacts/` |
-| 用例生成 | ✅ | 读取控件 JSON → 生成用例 → `validate_cases` → `json_to_xlsx`；找不到控件时允许 `web_search` 兜底 |
+| 用例生成 | ✅ | 读取控件 JSON → 生成用例 → `validate_cases` → `json_to_xlsx`；目标模块控件缺失时直接停止并说明 |
 | 运行日志 | ✅ | 每次进程独立 `reports/logs/test_run_<timestamp>_<pid>.log` |
-| `frontend/index.html` | 🚧 | 静态界面原型，尚未接后端 |
-| `api/`、`core/` | 🚧 | 空占位，后端尚未实现 |
+| `api/main.py` | ✅ | FastAPI `/api/chat`：同步调用 AgentRunner，返回结果与 JSON/xlsx 地址 |
+| `frontend/chat.html` | ✅ | 简单对话页，调用 `/api/chat` 并展示结果/产物链接 |
+| `frontend/index.html` | 🚧 | 旧静态界面原型，未接后端 |
+| `core/` | 🚧 | 空占位 |
 | RAG 检索 | ⏸️ | 当前 Agent 链路**未接入** RAG；`docs/`、`docker/`、`knowledge-store/` 保留为后续资产 |
 | `DomToExcel/` | 🗄️ | 旧工具/应用，保留兼容，不是新 Agent 的依赖 |
 
 ### 已知限制
 
-- `AgentRunner.max_turns` 目前只保存、未传给 graph，轮数仍由 LangGraph 默认值控制。
-- CaseAgent 没有强制的“必须读控件”门禁；控件找不到时会用 `web_search`。
+- Agent 最大步数由 `AGENT_MAX_STEPS` 控制（默认 20），对应 LangGraph `recursion_limit`；
+  这是 graph 步数，不是 ReAct 轮数，20 步约 10 次工具循环。
+- CaseAgent 的停止规则由 Skill / 系统提示词约束，没有代码级预检；模型极端情况下仍可能不遵循。
 - 没有 API Agent；`web_fetch` 可发 HTTP，但没有专门的接口断言工具。
-- 没有后端 API，也没有真正的 Web 前端；`frontend/index.html` 只是静态原型。
+- 当前 `/api/chat` 同步等待 Agent 完成；长任务可能超时，暂无状态轮询。
+- Agent / Skill 管理接口、鉴权和多用户隔离尚未实现。
 
 ## 3. 目录结构
 
@@ -72,8 +76,11 @@ RAG_UI_Test/
 │   └── case_generation/SKILL.md
 ├── testself/               # 当前 pytest 主目录（testpaths）
 ├── examples/run_agent.py   # AgentRunner 运行示例
-├── frontend/index.html     # 前端静态原型
-├── api/                    # 后端 API 占位（未实现）
+├── frontend/chat.html      # 简单对话页（已接 /api/chat）
+├── frontend/index.html     # 旧静态原型
+├── api/main.py             # FastAPI 入口：/api/chat
+├── api/model.py            # ORM 模型
+├── api/schema.py           # Pydantic 请求 / 响应
 ├── core/                   # 核心占位（未实现）
 ├── data/                   # YAML 数据（config / login_cases / purchase）
 ├── docs/                   # 业务文档（RAG 历史资产）
@@ -104,7 +111,7 @@ RAG_UI_Test/
 - 工具统一通过 `get_context()` 读取 `ToolContext`；启动时用 `configure(workspace=..., artifacts=..., config=...)` 注入。
 - 默认 `workspace` 是进程启动时的 CWD，默认 `artifacts` 是 `workspace/artifacts/<run_id>`。
 - 工具的相对路径都基于 `workspace`；任务里不要重复拼 `testself/selfcache/...` 这类前缀，否则会路径重复。
-- CaseAgent 路径不确定时先用 `list_dir(".")` / `list_dir("artifacts/dom")` 发现文件，再 `read_file`。
+- CaseAgent 只查 `artifacts/dom`；目标模块控件缺失时直接停止，不遍历项目根目录。
 - 控件文件约定：`artifacts/dom/<module>_capture.json`、`_facts_compact.json`、`_list.json`、`_add.json`。
 
 ### 4.4 工具写法
@@ -134,7 +141,8 @@ RAG_UI_Test/
 - 新增依赖写 `pyproject.toml`，并同步 `uv.lock`。
 - `.env` 含密钥，已 git 忽略；常用键：
   `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_FAST_MODEL`、`LLM_STRONG_MODEL`、
-  `ERP_USERNAME`、`ERP_PASSWORD`、`LANGSMITH_API_KEY`、`LANGSMITH_TRACING`。
+  `AGENT_MAX_STEPS`、`ERP_USERNAME`、`ERP_PASSWORD`、
+  `LANGSMITH_API_KEY`、`LANGSMITH_TRACING`。
 - `DomToExcel/` 是旧实现，不要从 `agent/` 或 `tool/` 反向依赖它。
 
 ## 5. 常用命令
@@ -161,13 +169,13 @@ python examples/run_agent.py
 ## 6. 下一步（方向性，未定稿）
 
 1. **后端**
-   - 实现 `api/`：任务提交、状态查询、日志/产物下载、用例审核接口；
+   - 补全 `api/`：任务状态轮询、Agent / Skill 管理、日志/产物下载、用例审核接口；
    - `AgentRunner` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤 pipeline；
    - 工具层补齐：路径约定、控件索引/发现、必要的执行类工具；
    - 视需要接入 RAG，并评估 API Agent。
 
 2. **前端**
-   - 把 `frontend/index.html` 接到后端 API；
+   - 在 `frontend/chat.html` 基础上增加历史记录、Agent/Skill 管理和产物预览；
    - 任务输入、Agent 循环日志/ LangSmith trace、产物（控件 JSON / xlsx / 截图）展示；
    - 用例生成结果的人工审核与回写。
 

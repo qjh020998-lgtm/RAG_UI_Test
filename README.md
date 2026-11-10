@@ -57,7 +57,8 @@ PageAgent（页面交互）                 CaseAgent（用例生成）
 4. `validate_cases` 校验，直到 `ok=true`；
 5. `json_to_xlsx` 写出 xlsx。
 
-控件文件找不到时才允许 `web_search` 补充业务语义作为兜底。
+目标模块的 `<module>_capture.json` 不存在时，CaseAgent 会立即停止并返回说明；
+`web_search` 只用于补充已有控件对应的业务语义，不能替代控件文件。
 
 ### 日志
 
@@ -141,6 +142,20 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+### 5. 启动 API + 前端
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+打开：
+
+```text
+http://127.0.0.1:8000/
+```
+
+页面输入 `sender_id` 和任务，提交后会调用 `POST /api/chat`，展示 Agent 结果与 JSON / Excel 产物链接。
+
 ## Agent 说明
 
 ### PageAgent
@@ -179,8 +194,11 @@ RAG_UI_Test/
 ├── Skills/                 # page / case_generation 两份技能
 ├── testself/               # 当前 pytest 主目录
 ├── examples/run_agent.py   # AgentRunner 示例
-├── frontend/index.html     # 前端静态原型（尚未接后端）
-├── api/                    # 后端 API 占位（未实现）
+├── frontend/chat.html      # 简单对话页（已接 /api/chat）
+├── frontend/index.html     # 旧静态原型
+├── api/main.py             # FastAPI 入口：/api/chat
+├── api/model.py            # ORM 模型
+├── api/schema.py           # Pydantic 请求 / 响应
 ├── core/                   # 核心占位（未实现）
 ├── data/                   # YAML 数据
 ├── reports/logs/           # 每次运行独立日志
@@ -196,6 +214,7 @@ RAG_UI_Test/
 | `LLM_API_KEY` / `LLM_BASE_URL` | 模型鉴权与地址 |
 | `LLM_FAST_MODEL` / `LLM_STRONG_MODEL` | 快/强模型 |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` / `LLM_MAX_RETRIES` | 生成参数 |
+| `AGENT_MAX_STEPS` | 单任务最大 graph 步数（默认 20，约 10 次工具循环；不是 ReAct 轮数） |
 | `ERP_USERNAME` / `ERP_PASSWORD` | 登录态失效时自动登录 |
 | `LANGSMITH_TRACING` / `LANGSMITH_API_KEY` / `LANGSMITH_PROJECT` | 可选云端 trace |
 
@@ -215,21 +234,23 @@ configure(
 
 ## 已知限制
 
-- `AgentRunner.max_turns` 目前只保存，未传给 graph；轮数仍由 LangGraph 默认值控制。
+- Agent 最大步数由 `AGENT_MAX_STEPS` 控制（默认 20），对应 LangGraph `recursion_limit`；
+  这是 graph 步数，不是 ReAct 轮数，20 步约 10 次工具循环。
 - 没有独立的 API Agent；`web_fetch` 可以发 HTTP 请求，但没有接口断言工具。
 - CaseAgent 在找不到控件时仍可能走 `web_search`，需要在提示词/校验层继续加固。
 - 当前 Agent 链路未接入 RAG。
-- 后端 API 与前端交互尚未实现，`frontend/index.html` 只是静态原型。
+- 当前 `/api/chat` 同步等待 Agent 完成；长任务可能触发前端/代理超时，暂无 run 状态轮询。
+- Agent / Skill 管理接口、鉴权和多用户隔离尚未实现。
 
 ## 下一步（方向性）
 
 1. **后端**
-   - 实现 `api/`：任务提交、状态查询、日志/产物下载、用例审核；
+   - 补全 `api/`：任务状态轮询、Agent / Skill 管理、日志/产物下载、用例审核；
    - `AgentRunner` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤任务；
    - 工具层继续补强控件发现、路径约定和执行类工具。
 
 2. **前端**
-   - 将 `frontend/index.html` 接入后端 API；
+   - 在 `frontend/chat.html` 基础上增加历史记录、Agent/Skill 管理和产物预览；
    - 展示 Agent 循环日志、trace、控件 JSON、xlsx 和截图；
    - 支持用例生成结果的人工审核。
 
