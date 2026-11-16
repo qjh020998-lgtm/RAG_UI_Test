@@ -1,10 +1,10 @@
-﻿"""PageAgent 集成自测。
+"""PageAgent 集成自测。
 
 测试分四个隔离块：
 1. 意图识别：纯逻辑，无外部依赖
 2. 工具绑定：验证 PageAgent 默认工具集
 3. 工具调用：直接测试 tool/ 中的工具（文件读写、Excel、校验）
-4. AgentRunner 全流程：通过 Runner 执行真实任务（含登录前置条件）
+4. AgentOrchestrator 全流程：通过编排器执行真实任务（含登录前置条件）
 """
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ from typing import Any
 
 import pytest
 
-from agent.agents import CaseAgent, ERPAgentHub, PageAgent, detect_intent
+from agent.agents import CaseAgent, CodeAgent, ERPAgentHub, GeneralAgent, PageAgent, detect_intent
 from agent.base import AgentType
-from agent.runner import AgentRunner
+from agent.orchestrator import AgentOrchestrator, AgentRequest
 from tool.context import configure, get_context
 
 pytestmark = pytest.mark.agent
@@ -29,7 +29,7 @@ pytestmark = pytest.mark.agent
 
 
 class TestIntentDetection:
-    """意图识别：验证任务描述正确路由到 PageAgent 或 CaseAgent。"""
+    """意图识别：验证任务描述正确路由到 Page / Case / Code / General。"""
 
     def test_capture_task_routes_to_page_agent(self) -> None:
         """采集页面控件任务应路由到 PageAgent。"""
@@ -45,19 +45,27 @@ class TestIntentDetection:
 
     def test_case_generation_task_routes_to_case_agent(self) -> None:
         """用例生成任务应路由到 CaseAgent。"""
-        assert detect_intent("生成采购订单的测试用例") == AgentType.CASE_GENERATION
+        assert detect_intent("生成采购订单的测试用例") == AgentType.CASE
 
     def test_test_point_task_routes_to_case_agent(self) -> None:
         """测试点设计任务应路由到 CaseAgent。"""
-        assert detect_intent("设计采购入库的测试点") == AgentType.CASE_GENERATION
+        assert detect_intent("设计采购入库的测试点") == AgentType.CASE
+        assert detect_intent("设计采购订单的自动化测试用例") == AgentType.CASE
 
-    def test_unknown_task_routes_to_page_agent(self) -> None:
-        """无法识别的任务默认路由到 PageAgent。"""
-        assert detect_intent("随便说点什么") == AgentType.PAGE
+    def test_code_generation_task_routes_to_code_agent(self) -> None:
+        """自动化代码生成任务应路由到 CodeAgent。"""
+        assert detect_intent("根据采购订单用例生成自动化测试代码") == AgentType.CODE
+        assert detect_intent("写一个 Playwright pytest 脚本") == AgentType.CODE
 
-    def test_empty_task_routes_to_page_agent(self) -> None:
-        """空任务默认路由到 PageAgent。"""
-        assert detect_intent("") == AgentType.PAGE
+    def test_general_chat_routes_to_general_agent(self) -> None:
+        """普通闲聊应路由到 GeneralAgent。"""
+        assert detect_intent("随便说点什么") == AgentType.GENERAL
+        assert detect_intent("你好，今天天气怎么样") == AgentType.GENERAL
+        assert detect_intent("写一首关于秋天的诗") == AgentType.GENERAL
+
+    def test_empty_task_routes_to_general_agent(self) -> None:
+        """空任务默认路由到 GeneralAgent。"""
+        assert detect_intent("") == AgentType.GENERAL
 
 
 # ----------------------------------------------------------------------
@@ -103,6 +111,14 @@ class TestPageAgentTools:
     def test_case_agent_tools_include_validator(self) -> None:
         """CaseAgent 默认工具集必须包含用例校验工具。"""
         assert "validate_cases" in [t.name for t in CaseAgent.default_tools()]
+
+    def test_code_agent_tools(self) -> None:
+        """CodeAgent 应能读写文件和读取 xlsx 用例。"""
+        names = [t.name for t in CodeAgent.default_tools()]
+        assert "read_file" in names
+        assert "write_file" in names
+        assert "list_dir" in names
+        assert "read_xlsx" in names
 
 
 # ----------------------------------------------------------------------
@@ -247,12 +263,12 @@ class TestToolInvocation:
 
 
 # ----------------------------------------------------------------------
-# 块 4：AgentRunner 全流程（含登录前置条件）
+# 块 4：AgentOrchestrator 全流程（含登录前置条件）
 # ----------------------------------------------------------------------
 
 
-class TestAgentRunner:
-    """AgentRunner 全流程：通过 Runner 执行真实任务。"""
+class TestAgentOrchestrator:
+    """AgentOrchestrator 全流程：通过编排器执行真实任务。"""
 
     @pytest.fixture(autouse=True)
     def setup_context(self) -> None:
@@ -262,75 +278,80 @@ class TestAgentRunner:
         configure(
             workspace=selfcache,
             artifacts=selfcache / "artifacts",
-            run_id="test_runner",
+            run_id="test_orchestrator",
         )
 
-    def test_runner_initialization(self) -> None:
-        """AgentRunner 应能正常初始化。"""
-        runner = AgentRunner(max_steps=5)
-        assert runner.max_steps == 5
-        assert runner.hub is not None
+    def test_orchestrator_initialization(self) -> None:
+        """AgentOrchestrator 应能正常初始化。"""
+        orchestrator = AgentOrchestrator(max_steps=5)
+        assert orchestrator.max_steps == 5
+        assert orchestrator.hub is not None
 
-    def test_runner_dispatch_page_task(self) -> None:
-        """Runner 应将采集任务分发到 PageAgent。"""
-        runner = AgentRunner()
-        agent = runner.hub.dispatch("采集采购订单页面的控件")
+    def test_orchestrator_dispatch_page_task(self) -> None:
+        """编排器持有的 Hub 应将采集任务分发到 PageAgent。"""
+        orchestrator = AgentOrchestrator()
+        agent = orchestrator.hub.dispatch("采集采购订单页面的控件")
         assert isinstance(agent, PageAgent)
 
-    def test_runner_dispatch_case_task(self) -> None:
-        """Runner 应将用例生成任务分发到 CaseAgent。"""
-        runner = AgentRunner()
-        agent = runner.hub.dispatch("生成采购订单的测试用例")
+    def test_orchestrator_dispatch_case_task(self) -> None:
+        """编排器持有的 Hub 应将用例生成任务分发到 CaseAgent。"""
+        orchestrator = AgentOrchestrator()
+        agent = orchestrator.hub.dispatch("生成采购订单的测试用例")
         assert isinstance(agent, CaseAgent)
 
-    def test_runner_execute_page_task_with_login(self) -> None:
-        """Runner 执行采集任务时应自动处理登录。
+    def test_orchestrator_execute_page_task_with_login(self) -> None:
+        """编排器执行采集任务时应自动处理登录。
 
         真实流程缺陷检测：
         - 采集页面时需要先登录
         - 登录失败应返回明确错误
         - 登录成功后应能正常采集
         """
-        runner = AgentRunner()
-        # 任务描述中应包含登录信息，或者 Agent 应自动处理登录
-        result = asyncio.run(runner.run(
+        orchestrator = AgentOrchestrator()
+        result = asyncio.run(orchestrator.run(
             "采集采购订单页面的控件信息，包含新增表单界面的控件信息"
         ))
-        # 不预设结果，让测试暴露真实问题
-        print(f"状态：{result['status']}")
-        print(f"Agent 类型：{result['agent_type']}")
-        print(f"内容：{result['content'][:500]}")
+        print(f"状态：{result.status}")
+        print(f"Agent 类型：{result.agent_type}")
+        print(f"内容：{result.content[:500]}")
 
-    def test_runner_execute_case_task(self) -> None:
-        """Runner 执行用例生成任务。"""
-        runner = AgentRunner()
-        result = asyncio.run(runner.run("生成采购订单的测试用例10条，写入testself/selfcache/artifacts/xlsx中"))
-        print(f"状态：{result['status']}")
-        print(f"Agent 类型：{result['agent_type']}")
-        print(f"内容：{result['content'][:500]}")
+    def test_orchestrator_execute_case_task(self) -> None:
+        """编排器执行用例生成任务。"""
+        orchestrator = AgentOrchestrator()
+        result = asyncio.run(
+            orchestrator.run("生成采购订单的测试用例10条，写入testself/selfcache/artifacts/xlsx中")
+        )
+        print(f"状态：{result.status}")
+        print(f"Agent 类型：{result.agent_type}")
+        print(f"内容：{result.content[:500]}")
 
-    def test_runner_explicit_agent_type(self) -> None:
-        """Runner 显式指定 Agent 类型应正确执行。"""
-        runner = AgentRunner(max_steps=5)
-        result = asyncio.run(runner.run_with_agent_type(
-            "读取 artifacts 目录",
-            AgentType.PAGE,
-        ))
-        print(f"状态：{result['status']}")
-        print(f"Agent 类型：{result['agent_type']}")
-        print(f"内容：{result['content'][:500]}")
+    def test_orchestrator_explicit_agent_type(self) -> None:
+        """显式指定 Agent 类型应正确执行。"""
+        orchestrator = AgentOrchestrator(max_steps=5)
+        result = asyncio.run(
+            orchestrator.run(
+                AgentRequest(task="读取 artifacts 目录", agent_type=AgentType.PAGE)
+            )
+        )
+        print(f"状态：{result.status}")
+        print(f"Agent 类型：{result.agent_type}")
+        print(f"内容：{result.content[:500]}")
 
-    def test_runner_empty_task(self) -> None:
-        """Runner 处理空任务应返回错误。"""
-        runner = AgentRunner()
-        result = asyncio.run(runner.run(""))
-        assert result["status"] == "error"
-
-    def test_runner_invalid_agent_type(self) -> None:
-        """Runner 显式指定无效 Agent 类型应抛异常。"""
-        runner = AgentRunner()
+    def test_orchestrator_empty_task(self) -> None:
+        """编排器处理空任务应抛 ValueError。"""
+        orchestrator = AgentOrchestrator()
         with pytest.raises(ValueError):
-            asyncio.run(runner.run_with_agent_type("test", "invalid"))  # type: ignore[arg-type]
+            asyncio.run(orchestrator.run(""))
+
+    def test_orchestrator_invalid_agent_type(self) -> None:
+        """显式指定无效 Agent 类型应抛异常。"""
+        orchestrator = AgentOrchestrator()
+        with pytest.raises(ValueError):
+            asyncio.run(
+                orchestrator.run(
+                    AgentRequest(task="test", agent_type="invalid")  # type: ignore[arg-type]
+                )
+            )
 
 
 # ----------------------------------------------------------------------
@@ -351,11 +372,23 @@ class TestERPAgentHub:
         hub = ERPAgentHub()
         assert isinstance(hub.dispatch("生成采购订单的测试用例"), CaseAgent)
 
+    def test_hub_dispatch_general_task(self) -> None:
+        """Hub 应将普通对话分发到 GeneralAgent。"""
+        hub = ERPAgentHub()
+        assert isinstance(hub.dispatch("你好，今天天气怎么样"), GeneralAgent)
+
+    def test_hub_dispatch_code_task(self) -> None:
+        """Hub 应将代码生成任务分发到 CodeAgent。"""
+        hub = ERPAgentHub()
+        assert isinstance(hub.dispatch("生成 Playwright 自动化测试脚本"), CodeAgent)
+
     def test_hub_get_agent_by_type(self) -> None:
         """Hub 应能按类型显式获取 Agent。"""
         hub = ERPAgentHub()
         assert isinstance(hub.get_agent(AgentType.PAGE), PageAgent)
-        assert isinstance(hub.get_agent(AgentType.CASE_GENERATION), CaseAgent)
+        assert isinstance(hub.get_agent(AgentType.CASE), CaseAgent)
+        assert isinstance(hub.get_agent(AgentType.CODE), CodeAgent)
+        assert isinstance(hub.get_agent(AgentType.GENERAL), GeneralAgent)
 
     def test_hub_get_agent_unknown_type_raises(self) -> None:
         """Hub 获取未知 Agent 类型时应抛 ValueError。"""
@@ -367,4 +400,6 @@ class TestERPAgentHub:
         """Hub 应返回所有 Agent 类型。"""
         hub = ERPAgentHub()
         assert AgentType.PAGE in hub.agent_types
-        assert AgentType.CASE_GENERATION in hub.agent_types
+        assert AgentType.CASE in hub.agent_types
+        assert AgentType.CODE in hub.agent_types
+        assert AgentType.GENERAL in hub.agent_types

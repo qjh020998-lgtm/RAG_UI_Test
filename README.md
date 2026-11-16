@@ -1,6 +1,11 @@
 # ERP 测试 Agent 平台
 
-基于 LangChain / LangGraph 的 ERP 测试 Agent 平台。当前主线是两个 Agent：
+基于 LangChain / LangGraph 的 ERP 测试 Agent 平台。当前主线是四个 Agent：
+
+- **PageAgent**：页面采集与交互；
+- **CaseAgent**：测试用例生成；
+- **CodeAgent**：根据用例生成 pytest + Playwright 自动化代码；
+- **GeneralAgent**：与 ERP 测试无关的普通对话。
 
 ```
 PageAgent（页面交互）                 CaseAgent（用例生成）
@@ -21,8 +26,8 @@ PageAgent（页面交互）                 CaseAgent（用例生成）
 | 模块 | 能力 |
 |------|------|
 | `agent/base.py` | `BaseAgent`：固定 `agent_type` / `system_prompt`，把 `Skills/*.md` 拼进 prompt，交给 LangGraph `create_react_agent` 执行 |
-| `agent/agents.py` | `PageAgent`、`CaseAgent`、`ERPAgentHub`、轻量意图识别 |
-| `agent/runner.py` | `AgentRunner`：任务分发、执行、结果包装 |
+| `agent/agents.py` | `PageAgent`、`CaseAgent`、`CodeAgent`、`GeneralAgent`、`ERPAgentHub`、轻量意图识别 |
+| `agent/orchestrator.py` | `AgentOrchestrator`：`AgentRequest` 路由、执行、GeneralAgent 降级；无性能路由/实体抽取 |
 | `agent/llm.py` | `build_llm()`：千问 / DeepSeek 共用 `ChatOpenAI`，支持 fast / strong |
 | `agent/loop_logger.py` | 按行记录模型调用、工具调用、token；控制台 + 文件同步输出 |
 
@@ -115,10 +120,10 @@ pytest testself/test_case_validator.py -q
 pytest testself/test_xlsx_handler.py -q
 ```
 
-`testself/test_pageagent.py::TestAgentRunner` 会真实调用 LLM + 浏览器，
+`testself/test_pageagent.py::TestAgentOrchestrator` 会真实调用 LLM + 浏览器，
 需要 `.env`、网络和 Chromium，单条约 2~3 分钟。
 
-### 4. 运行 AgentRunner 示例
+### 4. 运行 AgentOrchestrator 示例
 
 ```bash
 python examples/run_agent.py
@@ -129,14 +134,21 @@ python examples/run_agent.py
 ```python
 import asyncio
 
-from agent.runner import AgentRunner
+from agent.base import AgentType
+from agent.orchestrator import AgentOrchestrator, AgentRequest
 
 
 async def main() -> None:
-    runner = AgentRunner()
-    result = await runner.run("生成采购订单的测试用例")
-    print(result["agent_type"], result["status"])
-    print(result["content"])
+    orchestrator = AgentOrchestrator()
+    result = await orchestrator.run("生成采购订单的测试用例")
+    print(result.agent_type, result.status)
+    print(result.content)
+
+    # 显式指定 Agent，跳过意图识别
+    result = await orchestrator.run(
+        AgentRequest(task="采集采购订单页面的控件", agent_type=AgentType.PAGE)
+    )
+    print(result.agent_type, result.status)
 
 
 asyncio.run(main())
@@ -145,8 +157,13 @@ asyncio.run(main())
 ### 5. 启动 API + 前端
 
 ```bash
-uvicorn api.main:app --reload --port 8000
+uvicorn api.main:app --port 8000
 ```
+
+> Windows 上不要加 `--reload`：Uvicorn 在 reload 子进程模式会切换到
+> `SelectorEventLoop`，Playwright 无法通过它创建浏览器子进程，会在
+> `create_subprocess_exec` 处报 `NotImplementedError`。需要热更新时，
+> 单独重启 API，或只对前端做热更新。
 
 打开：
 
@@ -154,7 +171,35 @@ uvicorn api.main:app --reload --port 8000
 http://127.0.0.1:8000/
 ```
 
-页面输入 `sender_id` 和任务，提交后会调用 `POST /api/chat`，展示 Agent 结果与 JSON / Excel 产物链接。
+页面输入 `sender_id` 和任务，提交后会调用 `POST /api/chat/stream`，以 SSE 增量展示 Agent 输出、Markdown 和 JSON / Excel 产物链接。
+
+控制台包含：对话工作台、知识库管理、用例管理、代码管理、执行管理、会话管理、执行追踪。
+当前只有对话工作台接 `/api/chat/stream`，其余模块为前端演示数据/本地状态，待接后端。
+
+`POST /api/chat` 与 `POST /api/chat/stream` 的错误响应：
+
+| 状态码 | 场景 |
+|---|---|
+| `400` | `task` 为空或只包含空白字符；编排参数不合法 |
+| `409` | `message_id` 已存在，重复提交 |
+| `422` | 请求体字段缺失或类型不合法（FastAPI 自动校验） |
+| `500` | 编排器内部异常 |
+| `502` | Agent 执行失败，且 GeneralAgent 兜底也失败；错误记录仍会落库 |
+| `503` | 编排器未初始化，或聊天记录数据库不可用 |
+
+成功时返回 `200`；如果目标 Agent 失败但 GeneralAgent 已给出兜底说明，返回 `200` 且 `status="degraded"`。
+当前没有服务端超时控制，因此不会主动返回 `504`；长任务超时仍由前端/代理决定。
+
+流式接口在 SSE 开始前可返回 `400/409/422/503`；一旦流已经开始，HTTP 状态固定为 `200`，失败通过 `event: error` 事件返回。
+
+`POST /api/chat/stream` 的事件：
+
+| 事件 | 内容 |
+|---|---|
+| `meta` | `run_id`、`agent_type`、`route_reason` |
+| `delta` | 增量文本 `text` |
+| `done` | 最终 `content`、`status`、`artifacts` |
+| `error` | 错误说明、`run_id`、部分产物 |
 
 ## Agent 说明
 
@@ -180,26 +225,54 @@ http://127.0.0.1:8000/
 
 工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`read_xlsx`、`xlsx_to_json`、`json_to_xlsx`、`validate_cases`、`web_search`。
 
-### 意图识别
+### CodeAgent
 
-- 包含“用例 / 测试点 / 测试场景 / 测试设计 / 生成测试” → `CaseAgent`
-- 其他任务 → `PageAgent`
+负责把用例转成自动化测试代码：
+
+- 读取控件 JSON、用例 JSON / xlsx；
+- 生成 pytest + Playwright 测试代码；
+- 每条用例对应一个 `test_` 函数，包含明确断言；
+- 默认输出到 `tests/generated/test_<module>.py`；
+- 只生成代码，不执行代码、不修改业务数据。
+
+工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`read_xlsx`。
+
+### GeneralAgent
+
+处理与 ERP 测试无关的问题：
+
+- 闲聊、通用知识、代码解释、写作建议等；
+- 直接回答，不调用测试工具；
+- 如果用户实际想做 ERP 测试，会提示改成“采集控件”或“生成测试用例”任务。
+
+### 意图识别与路由
+
+- 四类测试意图由 `core.IntentRecognizer` 识别：
+  - 拆解需求文档 / PRD → `GeneralAgent`
+  - 采集页面控件 / 页面结构 → `PageAgent`
+  - 生成测试用例 / Excel → `CaseAgent`
+  - 生成 UI 自动化代码 / pytest 脚本 → `CodeAgent`
+- 未命中测试场景关键词时，回退 `agent.agents.detect_intent` 的轻量关键词规则；
+- 显式传 `AgentRequest(agent_type=...)` 时跳过意图识别；
+- 专业 Agent 执行失败时，`AgentOrchestrator` 会降级到 `GeneralAgent` 生成友好说明，`status="degraded"`；不再重放原任务。
 
 ## 目录结构
 
 ```
 RAG_UI_Test/
-├── agent/                  # Agent 核心（base/agents/runner/llm/config/loop_logger）
+├── agent/                  # Agent 核心（base/agents/orchestrator/llm/config/loop_logger）
 ├── tool/                   # LangChain 工具（文件、xlsx、web、校验、context）
-├── Skills/                 # page / case_generation 两份技能
+├── Skills/                 # page / case_generation / code_generation / general 四份技能
 ├── testself/               # 当前 pytest 主目录
-├── examples/run_agent.py   # AgentRunner 示例
-├── frontend/chat.html      # 简单对话页（已接 /api/chat）
+├── examples/run_agent.py   # AgentOrchestrator 示例
+├── frontend/console.html   # Agentest 八模块控制台：对话/知识库/用例/代码/执行/追踪/会话/系统状态
+├── frontend/chat.html      # 简单对话页（SSE 流式 + Markdown）
+├── frontend/agent_stream.js # SSE 解析与 Markdown 渲染
 ├── frontend/index.html     # 旧静态原型
-├── api/main.py             # FastAPI 入口：/api/chat
+├── api/main.py             # FastAPI 入口：/api/chat、/api/chat/stream
 ├── api/model.py            # ORM 模型
 ├── api/schema.py           # Pydantic 请求 / 响应
-├── core/                   # 核心占位（未实现）
+├── core/                   # 意图标签 / 纯规则 IntentRecognizer
 ├── data/                   # YAML 数据
 ├── reports/logs/           # 每次运行独立日志
 ├── artifacts/              # 运行时产物：dom / screenshots / xlsx
@@ -239,18 +312,18 @@ configure(
 - 没有独立的 API Agent；`web_fetch` 可以发 HTTP 请求，但没有接口断言工具。
 - CaseAgent 在找不到控件时仍可能走 `web_search`，需要在提示词/校验层继续加固。
 - 当前 Agent 链路未接入 RAG。
-- 当前 `/api/chat` 同步等待 Agent 完成；长任务可能触发前端/代理超时，暂无 run 状态轮询。
+- `/api/chat` 同步等待 Agent 完成；`/api/chat/stream` 已支持 SSE，但暂无服务端超时、断点续传和前端手动停止。
 - Agent / Skill 管理接口、鉴权和多用户隔离尚未实现。
 
 ## 下一步（方向性）
 
 1. **后端**
    - 补全 `api/`：任务状态轮询、Agent / Skill 管理、日志/产物下载、用例审核；
-   - `AgentRunner` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤任务；
+   - `AgentOrchestrator` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤任务；
    - 工具层继续补强控件发现、路径约定和执行类工具。
 
 2. **前端**
-   - 在 `frontend/chat.html` 基础上增加历史记录、Agent/Skill 管理和产物预览；
+   - 在 `frontend/console.html` 基础上接入知识库、用例、代码、执行、追踪和系统状态接口；
    - 展示 Agent 循环日志、trace、控件 JSON、xlsx 和截图；
    - 支持用例生成结果的人工审核。
 

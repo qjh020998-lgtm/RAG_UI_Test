@@ -1,7 +1,7 @@
 """API 层 ORM 模型。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, String, TEXT
 from sqlalchemy.orm import Mapped, mapped_column
@@ -29,4 +29,6 @@ class ChatRecord(Base):
     status: Mapped[str] = mapped_column(String(16), default="error")
     content: Mapped[str] = mapped_column(TEXT, default="")
     artifacts_json: Mapped[str] = mapped_column(TEXT, default="[]")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )

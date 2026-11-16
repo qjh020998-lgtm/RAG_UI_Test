@@ -20,6 +20,17 @@ wheels/
 # Runtime artifacts (screenshots, traces, downloads)
 artifacts/
 
+# Runtime databases
+*.db
+*.sqlite
+*.sqlite3
+checkpoints.sqlite*
+# ChromaDB 记忆库（episodic / user_profile）
+memory_db/
+
+# Agent / 测试临时目录
+.tmp_*/
+
 # Environment secrets
 .env
 

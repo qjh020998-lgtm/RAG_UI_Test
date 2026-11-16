@@ -10,15 +10,15 @@
 面向自研 ERP 系统的 **LLM Agent 测试平台**。当前主线是：
 
 ```
-PageAgent 采集页面控件/结构  →  CaseAgent 生成、校验并写出测试用例
-        （异步 Playwright）              （文件 + Excel）
+PageAgent 采集页面控件/结构  →  CaseAgent 生成测试用例  →  CodeAgent 生成自动化代码
+        （异步 Playwright）              （文件 + Excel）              （pytest + Playwright）
 ```
 
 - Agent 框架：LangChain 1.x + LangGraph `create_react_agent`
 - 模型：`ChatOpenAI`，兼容千问（DashScope）与 DeepSeek
 - 浏览器：`async_playwright`（**不是**旧的同步 POM 驱动）
 - 测试：pytest，当前 testpaths 为 `testself/`
-- 已起步：FastAPI `api/main.py` + `frontend/chat.html`；待补 Agent/Skill 管理
+- 已起步：FastAPI `api/main.py` + `frontend/console.html`（Agentest 八模块控制台）；待补各模块后端接口
 
 > `infrastructure/`（旧同步 POM / UI 测试 / conftest 浏览器 fixture）已删除，
 > 不要再新增或恢复 `sync_playwright` 的 UI 测试栈。
@@ -27,31 +27,35 @@ PageAgent 采集页面控件/结构  →  CaseAgent 生成、校验并写出测�
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| `agent/base.py` | ✅ | `BaseAgent`：固定 `agent_type` / `system_prompt`，把 `Skills/*.md` 拼进 prompt，用 `create_react_agent` 执行，带 `AgentLoopLogger` |
-| `agent/agents.py` | ✅ | `PageAgent`、`CaseAgent`、`ERPAgentHub`、轻量意图识别 |
-| `agent/runner.py` | ✅ | `AgentRunner.run` / `run_with_agent_type`，统一返回 `{agent_type, content, status}` |
+| `agent/base.py` | ✅ | `BaseAgent`：固定 `agent_type` / `system_prompt`，把 `Skills/*.md` 拼进 prompt，用 `create_react_agent` 执行；支持 `run` / `astream`（token 流） |
+| `agent/agents.py` | ✅ | `PageAgent`、`CaseAgent`、`CodeAgent`、`GeneralAgent`、`ERPAgentHub`、轻量意图识别 |
+| `agent/orchestrator.py` | ✅ | 最小编排：`AgentProfile` / `AgentRequest` / `AgentOrchestrator`，支持 `run` / `astream`，意图路由 + GeneralAgent 降级；无实体、性能路由、并行 |
 | `agent/llm.py` | ✅ | `build_llm()`：按 `agent/config.py` 创建千问 / DeepSeek 的 `ChatOpenAI`，支持 fast / strong |
 | `agent/loop_logger.py` | ✅ | LangChain callback：按行记录 model/tool/token，控制台与文件输出 |
 | `tool/` | ✅ | LangChain 工具：文件、目录、xlsx、网页/ERP 采集、用例校验 |
-| `Skills/` | ✅ | 两份技能：`page/SKILL.md`、`case_generation/SKILL.md` |
-| `testself/` | ✅ | 工具/Agent 自测；含真实 AgentRunner 集成测试 |
+| `Skills/` | ✅ | 四份技能：`page/SKILL.md`、`case_generation/SKILL.md`、`code_generation/SKILL.md`、`general/SKILL.md` |
+| `testself/` | ✅ | 工具/Agent 自测；含真实 AgentOrchestrator 集成测试 |
 | 页面采集 | ✅ | `capture_page`：list/add/all，自动登录，截图与 JSON 落 `artifacts/` |
 | 用例生成 | ✅ | 读取控件 JSON → 生成用例 → `validate_cases` → `json_to_xlsx`；目标模块控件缺失时直接停止并说明 |
 | 运行日志 | ✅ | 每次进程独立 `reports/logs/test_run_<timestamp>_<pid>.log` |
-| `api/main.py` | ✅ | FastAPI `/api/chat`：同步调用 AgentRunner，返回结果与 JSON/xlsx 地址 |
-| `frontend/chat.html` | ✅ | 简单对话页，调用 `/api/chat` 并展示结果/产物链接 |
+| `api/main.py` | ✅ | FastAPI：`/api/chat` 同步 + `/api/chat/stream` SSE，返回结果与 JSON/xlsx 地址 |
+| `frontend/console.html` | ✅ | Agentest 八模块控制台：对话/知识库/用例/代码/执行/追踪/会话/系统状态；对话接 `/api/chat/stream`，其余为演示数据；每次刷新自动新建 thread 并回到初始化欢迎态，历史会话保留在会话管理 |
+| `frontend/chat.html` | ✅ | 简单对话页：SSE 流式输出 + Markdown 渲染，展示结果/产物链接 |
 | `frontend/index.html` | 🚧 | 旧静态界面原型，未接后端 |
-| `core/` | 🚧 | 空占位 |
+| `core/` | ✅ | 四类测试场景意图、最小输出契约与纯规则识别器：`IntentCategory`、`IntentResult`、`_TEMPLATES`、`IntentRecognizer` |
 | RAG 检索 | ⏸️ | 当前 Agent 链路**未接入** RAG；`docs/`、`docker/`、`knowledge-store/` 保留为后续资产 |
 | `DomToExcel/` | 🗄️ | 旧工具/应用，保留兼容，不是新 Agent 的依赖 |
 
 ### 已知限制
 
-- Agent 最大步数由 `AGENT_MAX_STEPS` 控制（默认 20），对应 LangGraph `recursion_limit`；
-  这是 graph 步数，不是 ReAct 轮数，20 步约 10 次工具循环。
+- Agent 最大步数按类型配置：`AGENT_MAX_STEPS_<TYPE>`（如 `AGENT_MAX_STEPS_CODE=60`）
+  优先，其次用内置默认（general 10 / page 40 / case 40 / code 60），`AGENT_MAX_STEPS` 兜底；
+  对应 LangGraph `recursion_limit`，这是 graph 步数，不是 ReAct 轮数，20 步约 10 次工具循环。
 - CaseAgent 的停止规则由 Skill / 系统提示词约束，没有代码级预检；模型极端情况下仍可能不遵循。
-- 没有 API Agent；`web_fetch` 可发 HTTP，但没有专门的接口断言工具。
-- 当前 `/api/chat` 同步等待 Agent 完成；长任务可能超时，暂无状态轮询。
+- 意图识别是基于关键词的轻量规则，不是模型分类；极端表述可能被分到 General 或 Page。
+- `core/` 提供纯规则 `IntentRecognizer`；API 已接 `AgentOrchestrator`，当前不做性能路由、并行和实体抽取。
+- `/api/chat` 同步等待 Agent 完成；`/api/chat/stream` 已接 SSE，但暂无服务端超时、断点续传和手动停止。
+- Windows 上 Uvicorn `--reload` 会使用 SelectorEventLoop，Playwright 无法创建子进程；运行 API 时不要加 `--reload`。
 - Agent / Skill 管理接口、鉴权和多用户隔离尚未实现。
 
 ## 3. 目录结构
@@ -60,8 +64,8 @@ PageAgent 采集页面控件/结构  →  CaseAgent 生成、校验并写出测�
 RAG_UI_Test/
 ├── agent/                  # Agent 核心
 │   ├── base.py             # BaseAgent + Skills 组装 + graph 调用
-│   ├── agents.py           # PageAgent / CaseAgent / ERPAgentHub
-│   ├── runner.py           # AgentRunner 统一入口
+│   ├── agents.py           # PageAgent / CaseAgent / CodeAgent / GeneralAgent / ERPAgentHub
+│   ├── orchestrator.py     # AgentProfile / AgentRequest / 最小编排（路由 + 降级）
 │   ├── llm.py              # ChatOpenAI 工厂（千问 / DeepSeek）
 │   ├── config.py           # LLM 配置读取
 │   └── loop_logger.py      # Agent 循环日志 callback
@@ -73,15 +77,19 @@ RAG_UI_Test/
 │   └── case_validator.py   # validate_cases
 ├── Skills/
 │   ├── page/SKILL.md
-│   └── case_generation/SKILL.md
+│   ├── case_generation/SKILL.md
+│   ├── code_generation/SKILL.md
+│   └── general/SKILL.md
 ├── testself/               # 当前 pytest 主目录（testpaths）
-├── examples/run_agent.py   # AgentRunner 运行示例
-├── frontend/chat.html      # 简单对话页（已接 /api/chat）
+├── examples/run_agent.py   # AgentOrchestrator 运行示例
+├── frontend/console.html   # Agentest 八模块控制台（主入口）
+├── frontend/chat.html      # 简单对话页（SSE 流式 + Markdown）
+├── frontend/agent_stream.js # SSE 解析与 Markdown 渲染
 ├── frontend/index.html     # 旧静态原型
-├── api/main.py             # FastAPI 入口：/api/chat
+├── api/main.py             # FastAPI 入口：/api/chat、/api/chat/stream
 ├── api/model.py            # ORM 模型
 ├── api/schema.py           # Pydantic 请求 / 响应
-├── core/                   # 核心占位（未实现）
+├── core/                   # 四类测试场景意图 / IntentResult（无 entities）/ 纯规则 IntentRecognizer
 ├── data/                   # YAML 数据（config / login_cases / purchase）
 ├── docs/                   # 业务文档（RAG 历史资产）
 ├── reports/logs/           # 每次运行独立日志
@@ -96,6 +104,8 @@ RAG_UI_Test/
 
 - **PageAgent** 只做外部交互：`capture_page`、`close_browser`、`web_fetch`、`web_search`、文件读写。
 - **CaseAgent** 只做数据处理：读控件 JSON、生成用例、`validate_cases`、写 xlsx。
+- **CodeAgent** 只做代码生成：读控件/用例，写 pytest + Playwright 代码，不执行代码。
+- **GeneralAgent** 只做普通对话：不调用测试工具，不采集、不生成用例。
 - 工具通过各自的 `default_tools()` 分配，不要在调用点临时塞工具；新增工具先判断属于哪一层。
 - 不要再引入 `infrastructure.*` 或旧的 `page/`、`pw_core/` POM 代码。
 
@@ -103,7 +113,7 @@ RAG_UI_Test/
 
 - Agent / 工具主链路全部 async；`capture_page`、`web_search`、`web_fetch`、`close_browser` 都是 `async def`。
 - 不要在运行中的事件循环里调用同步 Playwright，也不要把 `sync_playwright` 带回项目。
-- `AgentRunner` 必须在同一个事件循环里 `await`；同步脚本用 `asyncio.run(main())`，不要在 async 函数里再 `asyncio.run`。
+- `AgentOrchestrator` 必须在同一个事件循环里 `await`；同步脚本用 `asyncio.run(main())`，不要在 async 函数里再 `asyncio.run`。
 - 不要在已有同步 Playwright 的线程里调 `asyncio.run`。
 
 ### 4.3 ToolContext 与路径
@@ -132,7 +142,7 @@ RAG_UI_Test/
 
 - `pytest.ini` 的 `testpaths = testself`；运行 `pytest` 即跑当前主线测试。
 - marker：`smoke` / `regression` / `e2e` / `agent`（`--strict-markers`）。
-- `testself/test_pageagent.py` 的 `TestAgentRunner` 会真实调用 LLM + 浏览器，需要 `.env`、网络和 `playwright install chromium`，单条约 2~3 分钟。
+- `testself/test_pageagent.py` 的 `TestAgentOrchestrator` 会真实调用 LLM + 浏览器，需要 `.env`、网络和 `playwright install chromium`，单条约 2~3 分钟。
 - 测试产物写 `testself/selfcache/` 或 pytest `tmp_path`，不要污染 `data/`、`cache/`、`knowledge-store/`。
 - 不要为了修路径去改用户的任务文本；应在 Agent 侧用 `list_dir` / 技能描述解决。
 
@@ -141,7 +151,8 @@ RAG_UI_Test/
 - 新增依赖写 `pyproject.toml`，并同步 `uv.lock`。
 - `.env` 含密钥，已 git 忽略；常用键：
   `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_FAST_MODEL`、`LLM_STRONG_MODEL`、
-  `AGENT_MAX_STEPS`、`ERP_USERNAME`、`ERP_PASSWORD`、
+  `AGENT_MAX_STEPS`（全局兜底）、`AGENT_MAX_STEPS_<TYPE>`（按 Agent 覆盖）、
+  `ERP_USERNAME`、`ERP_PASSWORD`、
   `LANGSMITH_API_KEY`、`LANGSMITH_TRACING`。
 - `DomToExcel/` 是旧实现，不要从 `agent/` 或 `tool/` 反向依赖它。
 
@@ -155,10 +166,10 @@ playwright install chromium
 # 当前主测试目录（pytest.ini testpaths=testself）
 pytest
 pytest testself/test_pageagent.py -q
-pytest testself/test_pageagent.py::TestAgentRunner::test_runner_execute_case_task -q -s
+pytest testself/test_pageagent.py::TestAgentOrchestrator::test_orchestrator_execute_case_task -q -s
 pytest --collect-only -q
 
-# AgentRunner 示例
+# AgentOrchestrator 示例
 python examples/run_agent.py
 
 # 日志
@@ -170,12 +181,12 @@ python examples/run_agent.py
 
 1. **后端**
    - 补全 `api/`：任务状态轮询、Agent / Skill 管理、日志/产物下载、用例审核接口；
-   - `AgentRunner` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤 pipeline；
+   - `AgentOrchestrator` 生产化：workspace/artifacts 注入、超时、资源清理、多步骤 pipeline；
    - 工具层补齐：路径约定、控件索引/发现、必要的执行类工具；
    - 视需要接入 RAG，并评估 API Agent。
 
 2. **前端**
-   - 在 `frontend/chat.html` 基础上增加历史记录、Agent/Skill 管理和产物预览；
+   - 在 `frontend/console.html` 基础上接入知识库、用例、代码、执行、会话、Langfuse 的真实接口；
    - 任务输入、Agent 循环日志/ LangSmith trace、产物（控件 JSON / xlsx / 截图）展示；
    - 用例生成结果的人工审核与回写。
 
@@ -183,8 +194,8 @@ python examples/run_agent.py
 
 ## 7. 参考
 
-- `examples/README.md`：AgentRunner 用法
-- `Skills/page/SKILL.md`、`Skills/case_generation/SKILL.md`：Agent 行为规范
+- `examples/README.md`：AgentOrchestrator 用法
+- `Skills/page/SKILL.md`、`Skills/case_generation/SKILL.md`、`Skills/code_generation/SKILL.md`、`Skills/general/SKILL.md`：Agent 行为规范
 - `testself/test_pageagent.py`：当前端到端测试
 - `plan/`、`docs/`：历史设计与 RAG 资料（部分已过时）
 - `DomToExcel/`：旧工具/应用，仅兼容保留

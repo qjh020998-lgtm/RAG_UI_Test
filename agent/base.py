@@ -6,27 +6,52 @@ ReAct 循环交给 LangGraph ``create_react_agent``；本模块只负责把
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import create_react_agent
 
 from agent.loop_logger import AgentLoopLogger, shorten
+from context import ContextBuilder
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class AgentType(str, Enum):
-    """ERP 测试平台的两类 Agent。"""
+# ContextBuilder 返回 OpenAI 风格消息，交给 LangGraph 前转成 LangChain 消息。
+_MESSAGE_TYPES = {
+    "system": SystemMessage,
+    "user": HumanMessage,
+    "assistant": AIMessage,
+}
 
-    PAGE = "page"                              # 页面交互：采集控件、UI 操作、HTTP 调用
-    CASE_GENERATION = "case_generation"        # 用例生成：知识检索 + 用例生成 + xlsx
+
+def _to_langchain_messages(messages: Sequence[dict[str, str]]) -> list[Any]:
+    converted = []
+    for message in messages:
+        message_type = _MESSAGE_TYPES.get(message.get("role", "user"), HumanMessage)
+        converted.append(message_type(content=message.get("content", "")))
+    return converted
+
+
+class AgentType(str, Enum):
+    """ERP 测试平台的 Agent 类型。"""
+
+    PAGE = "page"          # 页面交互：采集控件、UI 操作、HTTP 调用
+    CASE = "case"          # 用例生成：知识检索 + 用例生成 + xlsx
+    CODE = "code"          # 代码生成：用例 -> pytest + Playwright 代码
+    GENERAL = "general"    # 通用对话：与 ERP 测试无关的问题
 
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "Skills"
@@ -34,7 +59,9 @@ SKILLS_DIR = Path(__file__).resolve().parents[1] / "Skills"
 # 每类 Agent 的技能文件（相对 Skills/ 目录），拼进 system prompt。
 SKILL_FILES: dict[AgentType, str] = {
     AgentType.PAGE: "page/SKILL.md",
-    AgentType.CASE_GENERATION: "case_generation/SKILL.md",
+    AgentType.CASE: "case_generation/SKILL.md",
+    AgentType.CODE: "code_generation/SKILL.md",
+    AgentType.GENERAL: "general/SKILL.md",
 }
 
 
@@ -68,7 +95,12 @@ class BaseAgent:
     agent_type: AgentType
     system_prompt: str = ""
 
-    def __init__(self, llm: BaseChatModel, tools: Sequence[BaseTool] | None = None) -> None:
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        tools: Sequence[BaseTool] | None = None,
+        context_builder: ContextBuilder | None = None,
+    ) -> None:
         if not isinstance(getattr(self, "agent_type", None), AgentType):
             raise TypeError(f"{type(self).__name__} 必须定义 agent_type: AgentType")
         if llm is None:
@@ -76,10 +108,12 @@ class BaseAgent:
 
         self.llm = llm
         self.tools: list[BaseTool] = list(tools or [])
+        # 跨轮历史、用户画像和情景记忆统一由 ContextBuilder 负责；
+        # LangGraph 图不挂 checkpointer，只作为单轮无状态执行器。
+        self.context = context_builder or ContextBuilder()
         self._agent = create_react_agent(
             self.llm,
             tools=self.tools,
-            prompt=self.build_system_prompt(),
         )
 
 
@@ -97,30 +131,88 @@ class BaseAgent:
         parts = [self.system_prompt, skill, COMMON_RULES]
         return "\n\n".join(part.strip() for part in parts if part and part.strip())
 
+    def _check_finish_reason(self, final: AIMessage) -> None:
+        """撞到 max_tokens 时正文可能为空，这种结果不能当成成功返回。"""
+        finish_reason = (
+            getattr(final, "response_metadata", None) or {}
+        ).get("finish_reason")
+        if finish_reason != "length":
+            return
+
+        detail = shorten(getattr(final, "content", ""), 200)
+        hint = (
+            "模型输出被 max_tokens 截断（finish_reason=length），"
+            "请调大 LLM_MAX_TOKENS 或减少单次生成条数"
+        )
+        logger.error(
+            "[%s] %s | 已输出片段：%s",
+            type(self).__name__,
+            hint,
+            detail or "(空)",
+        )
+        raise RuntimeError(f"{hint}；已输出片段：{detail or '空'}")
+
+    async def _build_context(
+        self,
+        task: str,
+        *,
+        user_id: str | None,
+        thread_id: str | None,
+    ) -> tuple[list[dict[str, str]], str | None]:
+        """用三层记忆构建本轮消息，返回 ``(messages, session_id)``。
+
+        两者都不传时不做记忆读写，退化为「系统提示词 + 任务」的单轮输入。
+        """
+        system_prompt = self.build_system_prompt()
+        if not (user_id or thread_id):
+            return [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": task},
+            ], None
+
+        user_id = (user_id or "").strip() or (thread_id or "").strip() or "default"
+        session_id = (thread_id or "").strip() or user_id
+        messages = await self.context.build(
+            task,
+            user_id=user_id,
+            session_id=session_id,
+            system_prompt=system_prompt,
+        )
+        return messages, session_id
+
     async def run(
         self,
         task: str,
         *,
         recursion_limit: int = 20,
+        thread_id: str | None = None,
+        user_id: str | None = None,
     ) -> AIMessage:
         """执行一次任务，返回最终 AIMessage。
 
-        ``recursion_limit`` 是 LangGraph 的最大 graph 步数（不是 ReAct 轮数）。
+        ``recursion_limit`` 是 LangGraph 的最大 graph 步数；
+        ``thread_id`` 是会话 id（工作记忆/情景记忆），``user_id`` 是画像隔离键，
+        两者都不传时退化为无记忆的单轮执行。
         """
         if not task or not task.strip():
             raise ValueError("task 不能为空")
 
+        messages, session_id = await self._build_context(
+            task, user_id=user_id, thread_id=thread_id
+        )
         label = type(self).__name__
         started = time.perf_counter()
         logger.info("[%s] task start | %s", label, shorten(task, 160))
 
+        config: dict[str, Any] = {
+            "callbacks": [AgentLoopLogger(agent=label)],
+            "recursion_limit": recursion_limit,
+        }
+
         try:
             result = await self._agent.ainvoke(
-                {"messages": [HumanMessage(content=task)]},
-                config={
-                    "callbacks": [AgentLoopLogger(agent=label)],
-                    "recursion_limit": recursion_limit,
-                },
+                {"messages": _to_langchain_messages(messages)},
+                config=config,
             )
         except Exception:
             logger.exception(
@@ -130,13 +222,98 @@ class BaseAgent:
             )
             raise
 
+        messages = result.get("messages", [])
+        final = messages[-1] if messages else None
         logger.info(
             "[%s] task done | %.1fs | messages=%d",
             label,
             time.perf_counter() - started,
-            len(result.get("messages", [])),
+            len(messages),
         )
-        return result["messages"][-1]
+        if final is None:
+            raise RuntimeError("Agent 没有返回任何消息")
+
+        # 撞到 max_tokens 时正文可能为空，这种结果不能当成成功返回。
+        self._check_finish_reason(final)
+        if session_id:
+            self.context.add_assistant(session_id, str(final.content))
+
+        return final
+
+    async def astream(
+        self,
+        task: str,
+        *,
+        recursion_limit: int = 20,
+        thread_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AsyncIterator[dict[str, str]]:
+        """流式执行任务。
+
+        产出两类事件：
+
+        - ``{"type": "delta", "text": "..."}``：模型增量文本；
+        - ``{"type": "done", "content": "..."}``：最终完整回答。
+
+        ``values`` 模式用于拿最终 state，避免把中间 tool-call 文本当成结果。
+        """
+        if not task or not task.strip():
+            raise ValueError("task 不能为空")
+
+        messages, session_id = await self._build_context(
+            task, user_id=user_id, thread_id=thread_id
+        )
+        label = type(self).__name__
+        started = time.perf_counter()
+        logger.info("[%s] stream start | %s", label, shorten(task, 160))
+
+        config: dict[str, Any] = {
+            "callbacks": [AgentLoopLogger(agent=label)],
+            "recursion_limit": recursion_limit,
+        }
+
+        final_state: Any = None
+        try:
+            async for mode, payload in self._agent.astream(
+                {"messages": _to_langchain_messages(messages)},
+                config=config,
+                stream_mode=["messages", "values"],
+            ):
+                if mode == "messages":
+                    chunk, _metadata = payload
+                    # messages 模式除了模型 token，还会推送 tool 节点的 ToolMessage
+                    # 和 chain 结束时的完整消息；只转发模型 token，避免把工具原始
+                    # 结果（如 read_file 的大段 JSON）当成回答流式打印出来。
+                    if not isinstance(chunk, AIMessageChunk):
+                        continue
+                    text = chunk.content
+                    if isinstance(text, str) and text:
+                        yield {"type": "delta", "text": text}
+                elif mode == "values":
+                    final_state = payload
+        except Exception:
+            logger.exception(
+                "[%s] stream failed | %.1fs",
+                label,
+                time.perf_counter() - started,
+            )
+            raise
+
+        messages = (final_state or {}).get("messages", [])
+        final = messages[-1] if messages else None
+        if final is None:
+            raise RuntimeError("Agent 没有返回任何消息")
+
+        self._check_finish_reason(final)
+        if session_id:
+            self.context.add_assistant(session_id, str(final.content))
+        logger.info(
+            "[%s] stream done | %.1fs | messages=%d",
+            label,
+            time.perf_counter() - started,
+            len(messages),
+        )
+        yield {"type": "done", "content": str(final.content)}
 
 
 __all__ = [
