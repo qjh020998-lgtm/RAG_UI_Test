@@ -51,10 +51,11 @@ PageAgent 采集页面控件/结构  →  CaseAgent 生成测试用例  →  Cod
 - Agent 最大步数按类型配置：`AGENT_MAX_STEPS_<TYPE>`（如 `AGENT_MAX_STEPS_CODE=60`）
   优先，其次用内置默认（general 10 / page 40 / case 40 / code 60），`AGENT_MAX_STEPS` 兜底；
   对应 LangGraph `recursion_limit`，这是 graph 步数，不是 ReAct 轮数，20 步约 10 次工具循环。
+- Agent 整体执行受 `AGENT_TIMEOUT` 控制（秒，默认 240）；超时会取消本次调用并返回 error。
 - CaseAgent 的停止规则由 Skill / 系统提示词约束，没有代码级预检；模型极端情况下仍可能不遵循。
 - 意图识别是基于关键词的轻量规则，不是模型分类；极端表述可能被分到 General 或 Page。
 - `core/` 提供纯规则 `IntentRecognizer`；API 已接 `AgentOrchestrator`，当前不做性能路由、并行和实体抽取。
-- `/api/chat` 同步等待 Agent 完成；`/api/chat/stream` 已接 SSE，但暂无服务端超时、断点续传和手动停止。
+- `/api/chat` 同步等待 Agent 完成；`/api/chat/stream` 已接 SSE，Agent 整体执行受 `AGENT_TIMEOUT` 控制，暂无断点续传和手动停止。
 - Windows 上 Uvicorn `--reload` 会使用 SelectorEventLoop，Playwright 无法创建子进程；运行 API 时不要加 `--reload`。
 - Agent / Skill 管理接口、鉴权和多用户隔离尚未实现。
 
@@ -71,7 +72,7 @@ RAG_UI_Test/
 │   └── loop_logger.py      # Agent 循环日志 callback
 ├── tool/                   # LangChain 工具层
 │   ├── context.py          # ToolContext / configure / get_context
-│   ├── file_system.py      # read_file / write_file / edit_file / list_dir
+│   ├── file_system.py      # read_file / write_file / edit_file / list_dir / load_code_inputs
 │   ├── xlsx_handler.py     # read_xlsx / xlsx_to_json / json_to_xlsx
 │   ├── web.py              # capture_page / web_search / web_fetch / close_browser
 │   └── case_validator.py   # validate_cases
@@ -152,6 +153,7 @@ RAG_UI_Test/
 - `.env` 含密钥，已 git 忽略；常用键：
   `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_FAST_MODEL`、`LLM_STRONG_MODEL`、
   `AGENT_MAX_STEPS`（全局兜底）、`AGENT_MAX_STEPS_<TYPE>`（按 Agent 覆盖）、
+  `AGENT_TIMEOUT`（整体执行超时，秒）、
   `ERP_USERNAME`、`ERP_PASSWORD`、
   `LANGSMITH_API_KEY`、`LANGSMITH_TRACING`。
 - `DomToExcel/` 是旧实现，不要从 `agent/` 或 `tool/` 反向依赖它。

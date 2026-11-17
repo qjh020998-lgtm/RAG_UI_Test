@@ -1,10 +1,13 @@
 """Agent 基类：固定类型与提示词，模型和工具由具体 Agent 传入。
 
-ReAct 循环交给 LangGraph ``create_react_agent``；本模块只负责把
-``recursion_limit``（graph 步数）传给 graph。
+ReAct 循环交给 LangGraph ``create_react_agent``；本模块负责把
+``recursion_limit``（graph 步数）传给 graph，并提供整体超时、流式事件
+和最终回答的后处理钩子。
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import time
 from collections.abc import AsyncIterator, Sequence
 from enum import Enum
@@ -27,6 +30,23 @@ from context import ContextBuilder
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class AgentTimeoutError(RuntimeError):
+    """Agent 整体执行超过 AGENT_TIMEOUT。"""
+
+
+def _load_timeout() -> float:
+    raw = (os.getenv("AGENT_TIMEOUT") or "").strip()
+    if not raw:
+        return 240.0
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"AGENT_TIMEOUT 必须是数字，当前值：{raw!r}") from exc
+    if value <= 0:
+        raise ValueError(f"AGENT_TIMEOUT 必须大于 0，当前值：{value}")
+    return value
 
 
 # ContextBuilder 返回 OpenAI 风格消息，交给 LangGraph 前转成 LangChain 消息。
@@ -100,14 +120,18 @@ class BaseAgent:
         llm: BaseChatModel,
         tools: Sequence[BaseTool] | None = None,
         context_builder: ContextBuilder | None = None,
+        timeout: float | None = None,
     ) -> None:
         if not isinstance(getattr(self, "agent_type", None), AgentType):
             raise TypeError(f"{type(self).__name__} 必须定义 agent_type: AgentType")
         if llm is None:
             raise ValueError("llm 不能为空")
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout 必须大于 0")
 
         self.llm = llm
         self.tools: list[BaseTool] = list(tools or [])
+        self.timeout = timeout if timeout is not None else _load_timeout()
         # 跨轮历史、用户画像和情景记忆统一由 ContextBuilder 负责；
         # LangGraph 图不挂 checkpointer，只作为单轮无状态执行器。
         self.context = context_builder or ContextBuilder()
@@ -151,6 +175,14 @@ class BaseAgent:
             detail or "(空)",
         )
         raise RuntimeError(f"{hint}；已输出片段：{detail or '空'}")
+
+    def _postprocess_final(self, content: str, task: str) -> str:
+        """最终回答的后处理钩子；默认不做修改。"""
+        return content
+
+    def _memory_content(self, content: str) -> str:
+        """写入工作记忆的内容；默认保存完整回答。"""
+        return content
 
     async def _build_context(
         self,
@@ -210,10 +242,21 @@ class BaseAgent:
         }
 
         try:
-            result = await self._agent.ainvoke(
-                {"messages": _to_langchain_messages(messages)},
-                config=config,
+            async with asyncio.timeout(self.timeout):
+                result = await self._agent.ainvoke(
+                    {"messages": _to_langchain_messages(messages)},
+                    config=config,
+                )
+        except TimeoutError as exc:
+            logger.error(
+                "[%s] task timeout | %.1fs | limit=%ss",
+                label,
+                time.perf_counter() - started,
+                self.timeout,
             )
+            raise AgentTimeoutError(
+                f"{label} 执行超过 {self.timeout:g}s，已取消"
+            ) from exc
         except Exception:
             logger.exception(
                 "[%s] task failed | %.1fs",
@@ -235,8 +278,11 @@ class BaseAgent:
 
         # 撞到 max_tokens 时正文可能为空，这种结果不能当成成功返回。
         self._check_finish_reason(final)
+        content = self._postprocess_final(str(final.content), task)
+        if content != str(final.content):
+            final = final.model_copy(update={"content": content})
         if session_id:
-            self.context.add_assistant(session_id, str(final.content))
+            self.context.add_assistant(session_id, self._memory_content(content))
 
         return final
 
@@ -250,8 +296,9 @@ class BaseAgent:
     ) -> AsyncIterator[dict[str, str]]:
         """流式执行任务。
 
-        产出两类事件：
+        产出事件：
 
+        - ``{"type": "progress", "text": "..."}``：工具调用准备阶段的状态提示；
         - ``{"type": "delta", "text": "..."}``：模型增量文本；
         - ``{"type": "done", "content": "..."}``：最终完整回答。
 
@@ -273,24 +320,46 @@ class BaseAgent:
         }
 
         final_state: Any = None
+        progress_sent = False
         try:
-            async for mode, payload in self._agent.astream(
-                {"messages": _to_langchain_messages(messages)},
-                config=config,
-                stream_mode=["messages", "values"],
-            ):
-                if mode == "messages":
-                    chunk, _metadata = payload
-                    # messages 模式除了模型 token，还会推送 tool 节点的 ToolMessage
-                    # 和 chain 结束时的完整消息；只转发模型 token，避免把工具原始
-                    # 结果（如 read_file 的大段 JSON）当成回答流式打印出来。
-                    if not isinstance(chunk, AIMessageChunk):
-                        continue
-                    text = chunk.content
-                    if isinstance(text, str) and text:
-                        yield {"type": "delta", "text": text}
-                elif mode == "values":
-                    final_state = payload
+            async with asyncio.timeout(self.timeout):
+                async for mode, payload in self._agent.astream(
+                    {"messages": _to_langchain_messages(messages)},
+                    config=config,
+                    stream_mode=["messages", "values"],
+                ):
+                    if mode == "messages":
+                        chunk, _metadata = payload
+                        # messages 模式除了模型 token，还会推送 tool 节点的 ToolMessage
+                        # 和 chain 结束时的完整消息；只转发模型 token，避免把工具原始
+                        # 结果（如 read_file 的大段 JSON）当成回答流式打印出来。
+                        if not isinstance(chunk, AIMessageChunk):
+                            continue
+                        tool_chunks = (
+                            getattr(chunk, "tool_call_chunks", None)
+                            or getattr(chunk, "tool_calls", None)
+                            or []
+                        )
+                        if tool_chunks and not progress_sent:
+                            progress_sent = True
+                            yield {"type": "progress", "text": "正在准备工具调用…"}
+                        text = chunk.content
+                        if isinstance(text, str) and text:
+                            yield {"type": "delta", "text": text}
+                    elif mode == "values":
+                        final_state = payload
+                        # 模型节点结束，下一次工具调用准备阶段可以再次提示。
+                        progress_sent = False
+        except TimeoutError as exc:
+            logger.error(
+                "[%s] stream timeout | %.1fs | limit=%ss",
+                label,
+                time.perf_counter() - started,
+                self.timeout,
+            )
+            raise AgentTimeoutError(
+                f"{label} 执行超过 {self.timeout:g}s，已取消"
+            ) from exc
         except Exception:
             logger.exception(
                 "[%s] stream failed | %.1fs",
@@ -305,18 +374,20 @@ class BaseAgent:
             raise RuntimeError("Agent 没有返回任何消息")
 
         self._check_finish_reason(final)
+        content = self._postprocess_final(str(final.content), task)
         if session_id:
-            self.context.add_assistant(session_id, str(final.content))
+            self.context.add_assistant(session_id, self._memory_content(content))
         logger.info(
             "[%s] stream done | %.1fs | messages=%d",
             label,
             time.perf_counter() - started,
             len(messages),
         )
-        yield {"type": "done", "content": str(final.content)}
+        yield {"type": "done", "content": content}
 
 
 __all__ = [
+    "AgentTimeoutError",
     "AgentType",
     "BaseAgent",
     "COMMON_RULES",

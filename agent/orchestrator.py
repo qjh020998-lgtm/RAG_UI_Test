@@ -16,7 +16,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage
 
 from agent.agents import ERPAgentHub, detect_intent
-from agent.base import AgentType
+from agent.base import AgentTimeoutError, AgentType
 from context import ContextOverflowError
 from core.intent_recognizer import IntentCategory, IntentRecognizer
 from utils.logger import get_logger
@@ -206,6 +206,11 @@ class AgentOrchestrator:
             content = str(exc)
             status = "error"
             route_reason = f"{route_reason}；上下文超限，未执行"
+        except AgentTimeoutError as exc:
+            logger.warning("[Orchestrator] %s 执行超时：%s", agent_type.value, exc)
+            content = str(exc)
+            status = "error"
+            route_reason = f"{route_reason}；执行超时"
         except Exception as exc:
             logger.exception("[Orchestrator] %s 执行失败", agent_type.value)
             if agent_type is AgentType.GENERAL:
@@ -238,7 +243,7 @@ class AgentOrchestrator:
         )
 
     async def astream(self, request: AgentRequest | str) -> AsyncIterator[dict[str, Any]]:
-        """流式执行：meta -> delta* -> done/error。"""
+        """流式执行：meta -> progress* -> delta* -> done/error。"""
         req = request if isinstance(request, AgentRequest) else AgentRequest(task=request)
         if not req.task or not req.task.strip():
             raise ValueError("task 不能为空")
@@ -261,7 +266,9 @@ class AgentOrchestrator:
             if req.user_id:
                 stream_kwargs["user_id"] = req.user_id
             async for event in agent.astream(req.task, **stream_kwargs):
-                if event["type"] == "delta":
+                if event["type"] == "progress":
+                    yield event
+                elif event["type"] == "delta":
                     chunks.append(event["text"])
                     yield event
                 elif event["type"] == "done":
@@ -282,6 +289,18 @@ class AgentOrchestrator:
                 "status": "error",
                 "agent_type": agent_type.value,
                 "route_reason": f"{route_reason}；上下文超限，未执行",
+                "request_id": req.request_id,
+            }
+            return
+        except AgentTimeoutError as exc:
+            logger.warning("[Orchestrator] %s 流式执行超时：%s", agent_type.value, exc)
+            yield {
+                "type": "error",
+                "content": str(exc),
+                "partial": "".join(chunks),
+                "status": "error",
+                "agent_type": agent_type.value,
+                "route_reason": f"{route_reason}；执行超时",
                 "request_id": req.request_id,
             }
             return

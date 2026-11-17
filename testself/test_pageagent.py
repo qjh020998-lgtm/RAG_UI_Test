@@ -113,12 +113,13 @@ class TestPageAgentTools:
         assert "validate_cases" in [t.name for t in CaseAgent.default_tools()]
 
     def test_code_agent_tools(self) -> None:
-        """CodeAgent 应能读写文件和读取 xlsx 用例。"""
+        """CodeAgent 只保留专用输入加载和 xlsx 兜底，代码由钩子落盘。"""
         names = [t.name for t in CodeAgent.default_tools()]
-        assert "read_file" in names
-        assert "write_file" in names
-        assert "list_dir" in names
+        assert "load_code_inputs" in names
         assert "read_xlsx" in names
+        assert "write_file" not in names
+        assert "read_file" not in names
+        assert "list_dir" not in names
 
 
 # ----------------------------------------------------------------------

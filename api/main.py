@@ -297,18 +297,36 @@ async def prepare_chat_stream(
     )
 
 
+async def _cancel_on_disconnect(request: Request, task: asyncio.Task | None) -> None:
+    """客户端断开时取消当前 SSE 任务，让底层模型请求一起停止。"""
+    while task is not None and not task.done():
+        try:
+            disconnected = await request.is_disconnected()
+        except Exception:  # noqa: BLE001
+            return
+        if disconnected:
+            task.cancel()
+            return
+        await asyncio.sleep(1)
+
+
 @app.post("/api/chat/stream", response_class=EventSourceResponse)
 async def chat_stream(
+    request: Request,
     ctx: ChatStreamContext = Depends(prepare_chat_stream),
 ) -> AsyncIterator[ServerSentEvent]:
-    """SSE 流式对话：meta -> delta* -> done/error。"""
+    """SSE 流式对话：meta -> progress* -> delta* -> done/error。"""
     status = "error"
     content = ""
     agent_type = "unknown"
     route_reason = ""
+    watcher: asyncio.Task | None = None
 
     try:
         async with ctx.run_lock:
+            watcher = asyncio.create_task(
+                _cancel_on_disconnect(request, asyncio.current_task())
+            )
             async for event in ctx.orchestrator.astream(
                 AgentRequest(
                     task=ctx.task,
@@ -328,6 +346,11 @@ async def chat_stream(
                 elif event_type == "delta":
                     content += str(event.get("text") or "")
                     yield ServerSentEvent(event="delta", data=event)
+                elif event_type == "progress":
+                    yield ServerSentEvent(
+                        event="progress",
+                        data={**event, "run_id": ctx.run_id},
+                    )
                 elif event_type == "done":
                     content = str(event.get("content") or content)
                     status = str(event.get("status") or "success")
@@ -349,6 +372,13 @@ async def chat_stream(
         logger.exception("流式编排失败：%s", ctx.task)
         status = "error"
         content = (content + "\n\n" if content else "") + f"执行失败：{exc}"
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
 
     if status == "error" and not content:
         content = "Agent 没有返回完整结果"

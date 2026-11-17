@@ -13,10 +13,25 @@ from pydantic import BaseModel, Field
 from tool.context import get_context
 
 _MAX_READ_CHARS = 120_000
+_MAX_CODE_INPUT_CHARS = 120_000
+_ARTIFACT_SUBDIRS = ("controls", "dom", "cases")
+
+# .env、私钥、git 元数据不进入模型上下文。
+_SENSITIVE_NAMES = {".env", "id_rsa", "id_ed25519"}
+_SENSITIVE_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
+
+
+def _is_sensitive(target: Path) -> bool:
+    name = target.name.lower()
+    if name in _SENSITIVE_NAMES or name.startswith(".env."):
+        return True
+    if target.suffix.lower() in _SENSITIVE_SUFFIXES:
+        return True
+    return ".git" in {part.lower() for part in target.parts}
 
 
 def _resolve(path: str, *, must_exist: bool = False) -> Path:
-    """解析路径，限制在 workspace 内。"""
+    """解析路径，限制在 workspace 内，并拦截敏感文件。"""
     workspace = get_context().workspace
     target = Path(path).expanduser()
     if not target.is_absolute():
@@ -24,6 +39,8 @@ def _resolve(path: str, *, must_exist: bool = False) -> Path:
     target = target.resolve()
     if not target.is_relative_to(workspace):
         raise ValueError(f"路径必须在 workspace 内：{workspace}")
+    if _is_sensitive(target):
+        raise ValueError("禁止访问敏感文件")
     if must_exist and not target.is_file():
         raise FileNotFoundError(f"文件不存在：{target}")
     return target
@@ -38,9 +55,43 @@ def _resolve_dir(path: str) -> Path:
     target = target.resolve()
     if not target.is_relative_to(workspace):
         raise ValueError(f"路径必须在 workspace 内：{workspace}")
+    if _is_sensitive(target):
+        raise ValueError("禁止访问敏感目录")
     if not target.is_dir():
         raise FileNotFoundError(f"目录不存在：{target}")
     return target
+
+
+def _relative(path: Path, workspace: Path) -> str:
+    """尽量返回相对 workspace 的路径，便于模型/日志阅读。"""
+    try:
+        return path.resolve().relative_to(workspace.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _read_optional(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return None
+    if len(text) > _MAX_CODE_INPUT_CHARS:
+        text = text[:_MAX_CODE_INPUT_CHARS] + "\n...[内容过长，已截断]"
+    return text
+
+
+def _json_or_text(text: str) -> object:
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
+
+
+def _names(directory: Path, limit: int = 30) -> list[str]:
+    try:
+        return sorted(item.name for item in directory.iterdir() if item.is_file())[:limit]
+    except OSError:
+        return []
 
 
 # ----------------------------------------------------------------------
@@ -164,4 +215,88 @@ def list_dir(path: str = ".", max_entries: int = 200) -> str:
         return f"错误：{type(exc).__name__}: {exc}"
 
 
-__all__ = ["edit_file", "list_dir", "read_file", "write_file"]
+# ----------------------------------------------------------------------
+# load_code_inputs
+# ----------------------------------------------------------------------
+
+
+class LoadCodeInputsInput(BaseModel):
+    module: str = Field(description="目标模块名，例如 采购订单")
+
+
+def _safe_module_name(module: str) -> str:
+    name = (module or "").strip()
+    if not name or name in {".", ".."}:
+        raise ValueError("module 不能为空")
+    if "/" in name or "\\" in name or Path(name).name != name:
+        raise ValueError("module 不能包含路径分隔符")
+    return name
+
+
+@tool(args_schema=LoadCodeInputsInput)
+def load_code_inputs(module: str) -> str:
+    """读取 CodeAgent 的控件与用例输入。
+
+    路径以当前 ``ToolContext.artifacts`` 为根，开发/测试环境自动隔离：
+    优先 ``controls/<module>.json``，其次 ``dom/<module>_facts_compact.json``；
+    用例读 ``cases/<module>_cases.json``。
+    """
+    try:
+        name = _safe_module_name(module)
+        ctx = get_context()
+        root = Path(ctx.artifacts)
+        controls_path = root / "controls" / f"{name}.json"
+        compact_path = root / "dom" / f"{name}_facts_compact.json"
+        cases_path = root / "cases" / f"{name}_cases.json"
+
+        controls_text = _read_optional(controls_path)
+        controls_source = _relative(controls_path, ctx.workspace)
+        if controls_text is None:
+            controls_text = _read_optional(compact_path)
+            controls_source = _relative(compact_path, ctx.workspace)
+        if controls_text is None:
+            return json.dumps({
+                "error": f"未找到 {name} 的控件文件",
+                "expected": [
+                    _relative(controls_path, ctx.workspace),
+                    _relative(compact_path, ctx.workspace),
+                ],
+                "available": {
+                    subdir: _names(root / subdir) for subdir in _ARTIFACT_SUBDIRS
+                },
+            }, ensure_ascii=False)
+
+        cases_text = _read_optional(cases_path)
+        if cases_text is None:
+            xlsx_files = sorted(
+                _relative(path, ctx.workspace)
+                for path in (root / "cases").glob(f"{name}*.xlsx")
+            )
+            return json.dumps({
+                "error": f"未找到 {name} 的 JSON 用例文件",
+                "expected": _relative(cases_path, ctx.workspace),
+                "controls_source": controls_source,
+                "controls": _json_or_text(controls_text),
+                "available_cases": _names(root / "cases"),
+                "xlsx": xlsx_files,
+            }, ensure_ascii=False)
+
+        return json.dumps({
+            "module": name,
+            "artifacts_root": _relative(root, ctx.workspace),
+            "controls_source": controls_source,
+            "cases_source": _relative(cases_path, ctx.workspace),
+            "controls": _json_or_text(controls_text),
+            "cases": _json_or_text(cases_text),
+        }, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001
+        return f"错误：{type(exc).__name__}: {exc}"
+
+
+__all__ = [
+    "edit_file",
+    "list_dir",
+    "load_code_inputs",
+    "read_file",
+    "write_file",
+]
